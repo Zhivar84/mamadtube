@@ -1135,10 +1135,10 @@ async function startServer() {
     }
   }
 
-  async function saveUsersToDisk(users: UserRecord[]): Promise<void> {
+  function saveUsersToDisk(users: UserRecord[]): void {
     try {
       ensureStorageFilesExist();
-      await fs.promises.writeFile(USERS_FILE_PATH, JSON.stringify(users, null, 2), 'utf-8');
+      fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(users, null, 2), 'utf-8');
     } catch (err) {
       console.error('Error saving users to disk:', err);
       throw err;
@@ -1157,10 +1157,10 @@ async function startServer() {
     }
   }
 
-  async function savePostsToDisk(posts: SocialPostRecord[]): Promise<void> {
+  function savePostsToDisk(posts: SocialPostRecord[]): void {
     try {
       ensureStorageFilesExist();
-      await fs.promises.writeFile(POSTS_FILE_PATH, JSON.stringify(posts, null, 2), 'utf-8');
+      fs.writeFileSync(POSTS_FILE_PATH, JSON.stringify(posts, null, 2), 'utf-8');
     } catch (err) {
       console.error('Error saving posts to disk:', err);
       throw err;
@@ -1182,10 +1182,10 @@ async function startServer() {
     }
   }
 
-  async function saveChatDataToDisk(chatData: ChatStoreData): Promise<void> {
+  function saveChatDataToDisk(chatData: ChatStoreData): void {
     try {
       ensureStorageFilesExist();
-      await fs.promises.writeFile(MESSAGES_FILE_PATH, JSON.stringify(chatData, null, 2), 'utf-8');
+      fs.writeFileSync(MESSAGES_FILE_PATH, JSON.stringify(chatData, null, 2), 'utf-8');
     } catch (err) {
       console.error('Error saving chat messages to disk:', err);
       throw err;
@@ -1207,10 +1207,10 @@ async function startServer() {
     }
   }
 
-  async function saveFilesDataToDisk(filesData: FilesStoreData): Promise<void> {
+  function saveFilesDataToDisk(filesData: FilesStoreData): void {
     try {
       ensureStorageFilesExist();
-      await fs.promises.writeFile(FILES_FILE_PATH, JSON.stringify(filesData, null, 2), 'utf-8');
+      fs.writeFileSync(FILES_FILE_PATH, JSON.stringify(filesData, null, 2), 'utf-8');
     } catch (err) {
       console.error('Error saving files data to disk:', err);
       throw err;

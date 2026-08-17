@@ -3,42 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Camera, 
-  CameraOff, 
   Mic, 
   MicOff, 
   Monitor, 
   MonitorOff, 
   Radio, 
   Users, 
-  Clock, 
   ArrowLeft, 
   Sliders, 
   MessageSquare, 
-  PhoneOff, 
-  Sparkles, 
-  Gauge, 
   Check, 
-  ShieldCheck,
-  Maximize2,
-  Minimize2,
   Settings,
   X,
-  Volume2,
   UploadCloud,
   AlertCircle,
-  Copy,
   Share2,
-  Play,
   Square,
   Activity,
-  Layers,
-  Heart,
-  Flame,
-  ThumbsUp,
-  PartyPopper,
   Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -86,17 +69,16 @@ export default function StreamStudio({
 
   // Stream Meta State
   const [streamTitle, setStreamTitle] = useState(
-    currentLiveStream?.title || `${currentUser?.displayName || 'Creator'}'s Live HLS Broadcast`
+    currentLiveStream?.title || `${currentUser?.displayName || 'Creator'}'s Live Screen Broadcast`
   );
   const [category, setCategory] = useState(currentLiveStream?.category || 'Tech & Coding');
-  const [tags, setTags] = useState(currentLiveStream?.tags?.join(', ') || 'live, hls, mamadtube');
+  const [tags, setTags] = useState(currentLiveStream?.tags?.join(', ') || 'live, screen, mamadtube');
 
-  // Media Devices State
-  const [isCameraOn, setIsCameraOn] = useState(true);
+  // Media Devices State (Screen Capture + Mic Audio Only - ZERO WEBCAM)
   const [isMicOn, setIsMicOn] = useState(true);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [deviceError, setDeviceError] = useState<string | null>(null);
 
@@ -117,7 +99,7 @@ export default function StreamStudio({
     totalBytesPushed: 0,
     currentBitrateKbps: 1800,
     lastChunkTime: 0,
-    fps: 30,
+    fps: 60,
     latencyMs: 38,
     status: 'idle'
   });
@@ -133,60 +115,21 @@ export default function StreamStudio({
   const sseRef = useRef<EventSource | null>(null);
   const isBroadcastingRef = useRef(false);
 
+  // Dedicated refs for real track control
+  const micTrackRef = useRef<MediaStreamTrack | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+
   const roomId = currentLiveStream?.roomId || `room_studio_${currentUser?.id || 'host'}`;
 
-  // 1. Initialize Camera & Mic on mount
+  // Keep stream refs updated
   useEffect(() => {
-    let mounted = true;
+    screenStreamRef.current = screenStream;
+  }, [screenStream]);
 
-    async function initDevices() {
-      try {
-        setDeviceError(null);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30 }
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
-
-        if (!mounted) {
-          stream.getTracks().forEach(t => t.stop());
-          return;
-        }
-
-        setCameraStream(stream);
-
-        // Attach to preview video element
-        if (previewVideoRef.current) {
-          previewVideoRef.current.srcObject = stream;
-          previewVideoRef.current.play().catch(() => {});
-        }
-
-        // Setup Web Audio Analyser for VU Meter
-        setupAudioAnalyser(stream);
-      } catch (err: any) {
-        console.warn('Could not initialize camera/mic:', err);
-        setDeviceError(
-          err.name === 'NotAllowedError'
-            ? 'Camera/Microphone permission denied. Please allow device access in browser settings.'
-            : `Device access error: ${err.message || 'Check camera and microphone connections.'}`
-        );
-      }
-    }
-
-    initDevices();
-
-    return () => {
-      mounted = false;
-      cleanupAudioAnalyser();
-    };
-  }, []);
+  useEffect(() => {
+    micStreamRef.current = micStream;
+  }, [micStream]);
 
   // Audio VU Meter
   const setupAudioAnalyser = (stream: MediaStream) => {
@@ -237,115 +180,151 @@ export default function StreamStudio({
     analyserRef.current = null;
   };
 
-  // 2. Toggle Camera Video Track
-  const toggleCamera = () => {
-    if (!cameraStream) return;
-    const videoTrack = cameraStream.getVideoTracks()[0];
-    if (videoTrack) {
-      const nextState = !videoTrack.enabled;
-      videoTrack.enabled = nextState;
-      setIsCameraOn(nextState);
-    }
-  };
+  // 1. Initialize Microphone on Mount (audio: true only)
+  useEffect(() => {
+    let mounted = true;
 
-  // 3. Toggle Microphone Audio Track
-  const toggleMicrophone = () => {
-    if (!cameraStream) return;
-    const audioTrack = cameraStream.getAudioTracks()[0];
-    if (audioTrack) {
-      const nextState = !audioTrack.enabled;
-      audioTrack.enabled = nextState;
-      setIsMicOn(nextState);
-    }
-  };
-
-  // 4. Native Screen Share (zero async delay / native desktop picker dialog)
-  const toggleScreenShare = async () => {
-    if (isScreenSharing) {
-      stopScreenSharing();
-    } else {
+    async function initMicrophone() {
       try {
         setDeviceError(null);
-        // Direct browser prompt for native Screen / Window / Chrome Tab picker
-        const displayStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            displaySurface: 'monitor',
-            cursor: 'always'
-          } as any,
-          audio: true
+        const mic = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
         });
 
-        setScreenStream(displayStream);
-        setIsScreenSharing(true);
-
-        // Switch preview video element to displayStream
-        if (previewVideoRef.current) {
-          previewVideoRef.current.srcObject = displayStream;
-          previewVideoRef.current.play().catch(() => {});
+        if (!mounted) {
+          mic.getTracks().forEach(t => t.stop());
+          return;
         }
 
-        // Handle user stopping screen share via Chrome's native floating toolbar
-        const screenVideoTrack = displayStream.getVideoTracks()[0];
-        if (screenVideoTrack) {
-          screenVideoTrack.onended = () => {
-            stopScreenSharing();
-          };
-        }
-
-        // If currently broadcasting, reconfigure the MediaRecorder with the active screen stream
-        if (isBroadcastingRef.current) {
-          restartMediaRecorderWithStream(displayStream);
-        }
+        const micAudioTrack = mic.getAudioTracks()[0];
+        micTrackRef.current = micAudioTrack || null;
+        setMicStream(mic);
+        setupAudioAnalyser(mic);
       } catch (err: any) {
-        if (err.name !== 'NotAllowedError') {
-          setDeviceError(`Screen sharing failed: ${err.message}`);
-        }
+        console.warn('Microphone access check:', err);
+        // Do not block user if mic is optional or denied
       }
+    }
+
+    initMicrophone();
+
+    return () => {
+      mounted = false;
+      cleanupAudioAnalyser();
+      if (micTrackRef.current) {
+        micTrackRef.current.stop();
+      }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
+
+  // 2. Real Toggle Microphone
+  const toggleMicrophone = async () => {
+    if (!micTrackRef.current) {
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        const track = mic.getAudioTracks()[0];
+        micTrackRef.current = track;
+        setMicStream(mic);
+        setIsMicOn(true);
+        setupAudioAnalyser(mic);
+        return;
+      } catch (err: any) {
+        setDeviceError(`Could not access microphone: ${err.message}`);
+        return;
+      }
+    }
+
+    const nextState = !micTrackRef.current.enabled;
+    micTrackRef.current.enabled = nextState;
+    setIsMicOn(nextState);
+  };
+
+  // 3. Screen Capture (Video + System Audio) & Combining
+  const startScreenCapture = async (): Promise<MediaStream | null> => {
+    try {
+      setDeviceError(null);
+      
+      // Request screen video & system audio
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'monitor',
+          cursor: 'always'
+        } as any,
+        audio: true
+      });
+
+      setScreenStream(displayStream);
+      setIsScreenSharing(true);
+
+      // Attach to preview element
+      if (previewVideoRef.current) {
+        previewVideoRef.current.srcObject = displayStream;
+        previewVideoRef.current.play().catch(() => {});
+      }
+
+      // Handle user stopping screen share via Chrome native stop button
+      const screenVideoTrack = displayStream.getVideoTracks()[0];
+      if (screenVideoTrack) {
+        screenVideoTrack.onended = () => {
+          stopScreenSharing();
+        };
+      }
+
+      return displayStream;
+    } catch (err: any) {
+      if (err.name !== 'NotAllowedError') {
+        setDeviceError(`Screen sharing failed: ${err.message}`);
+      }
+      return null;
     }
   };
 
   const stopScreenSharing = () => {
-    if (screenStream) {
-      screenStream.getTracks().forEach(t => t.stop());
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(t => t.stop());
       setScreenStream(null);
     }
     setIsScreenSharing(false);
 
-    // Revert preview to camera stream
-    if (cameraStream && previewVideoRef.current) {
-      previewVideoRef.current.srcObject = cameraStream;
-      previewVideoRef.current.play().catch(() => {});
+    if (previewVideoRef.current) {
+      previewVideoRef.current.srcObject = null;
     }
 
-    if (isBroadcastingRef.current && cameraStream) {
-      restartMediaRecorderWithStream(cameraStream);
+    if (isBroadcastingRef.current) {
+      handleToggleBroadcast(); // Stop broadcast if screen share ended
     }
   };
 
-  // Helper to compose active master stream
-  const getActiveCombinedStream = (videoSourceStream: MediaStream): MediaStream => {
-    const combined = new MediaStream();
-    // Add primary video track
-    const vidTrack = videoSourceStream.getVideoTracks()[0];
-    if (vidTrack) combined.addTrack(vidTrack);
+  // Helper to construct master broadcast stream combining Screen Video + Screen Audio + Mic Audio
+  const createCombinedStream = (currentScreen: MediaStream): MediaStream => {
+    const screenVideoTrack = currentScreen.getVideoTracks()[0];
+    const screenAudioTrack = currentScreen.getAudioTracks()[0];
+    const micAudioTrack = micTrackRef.current;
 
-    // Add microphone audio track
-    const micTrack = cameraStream?.getAudioTracks()[0];
-    if (micTrack) combined.addTrack(micTrack);
-
-    // If screen share has system audio, add it as well
-    const screenAudioTrack = screenStream?.getAudioTracks()[0];
-    if (screenAudioTrack) combined.addTrack(screenAudioTrack);
-
-    return combined;
+    return new MediaStream([
+      screenVideoTrack,
+      ...(screenAudioTrack ? [screenAudioTrack] : []),
+      ...(micAudioTrack ? [micAudioTrack] : [])
+    ]);
   };
 
-  // 5. In-Browser MediaRecorder HLS Chunk Ingest Engine
-  const startMediaRecording = (sourceStream: MediaStream) => {
-    const combinedStream = getActiveCombinedStream(sourceStream);
+  // 4. Ingest MediaRecorder
+  const startMediaRecording = (activeCombinedStream: MediaStream) => {
     sequenceCounterRef.current = 0;
 
-    // Detect optimal supported mimeType
     let mimeType = 'video/webm; codecs=vp8,opus';
     if (!MediaRecorder.isTypeSupported(mimeType)) {
       if (MediaRecorder.isTypeSupported('video/webm; codecs=vp8')) {
@@ -358,10 +337,10 @@ export default function StreamStudio({
     }
 
     try {
-      const recorder = new MediaRecorder(combinedStream, {
+      const recorder = new MediaRecorder(activeCombinedStream, {
         mimeType,
-        videoBitsPerSecond: 2000000, // 2 Mbps
-        audioBitsPerSecond: 128000  // 128 kbps
+        videoBitsPerSecond: 2500000, // 2.5 Mbps crisp screen capture
+        audioBitsPerSecond: 128000   // 128 kbps
       });
 
       recorder.ondataavailable = async (event: BlobEvent) => {
@@ -371,7 +350,6 @@ export default function StreamStudio({
           bytesInIntervalRef.current += chunkSize;
 
           try {
-            // Push binary chunk segment to HLS Ingest endpoint
             await fetch(`/api/stream/ingest/${roomId}`, {
               method: 'POST',
               headers: {
@@ -397,13 +375,12 @@ export default function StreamStudio({
               status: 'broadcasting'
             }));
           } catch (pushErr) {
-            console.error('Failed pushing stream chunk:', pushErr);
+            console.error('Failed pushing screen stream chunk:', pushErr);
           }
         }
       };
 
-      // Slice stream chunks every 2000ms (2-second HLS segments)
-      recorder.start(2000);
+      recorder.start(2000); // 2-second segments
       mediaRecorderRef.current = recorder;
     } catch (err: any) {
       console.error('Failed to start MediaRecorder:', err);
@@ -411,31 +388,35 @@ export default function StreamStudio({
     }
   };
 
-  const restartMediaRecorderWithStream = (newStream: MediaStream) => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {}
-    }
-    setTimeout(() => {
-      if (isBroadcastingRef.current) {
-        startMediaRecording(newStream);
-      }
-    }, 150);
-  };
-
-  // 6. Start / End Broadcast Handlers
+  // 5. Start / End Broadcast Handlers
   const handleToggleBroadcast = async () => {
     if (!isLive) {
-      // Start Broadcast
-      const activeStreamSource = (isScreenSharing && screenStream) ? screenStream : cameraStream;
-      if (!activeStreamSource) {
-        setDeviceError('No video device available to broadcast.');
-        return;
+      // If screen share is not active, prompt to start screen capture first
+      let currentScreen = screenStreamRef.current;
+      if (!currentScreen || !currentScreen.active) {
+        currentScreen = await startScreenCapture();
+        if (!currentScreen) {
+          return;
+        }
       }
 
+      // Ensure microphone is ready
+      if (!micTrackRef.current) {
+        try {
+          const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const track = mic.getAudioTracks()[0];
+          micTrackRef.current = track;
+          setMicStream(mic);
+          setupAudioAnalyser(mic);
+        } catch (e) {
+          console.warn('Microphone not available, continuing with screen audio only');
+        }
+      }
+
+      const combinedStream = createCombinedStream(currentScreen);
+
       isBroadcastingRef.current = true;
-      startMediaRecording(activeStreamSource);
+      startMediaRecording(combinedStream);
 
       onStartStream({
         title: streamTitle,
@@ -446,7 +427,6 @@ export default function StreamStudio({
 
       setTelemetry(prev => ({ ...prev, status: 'broadcasting', chunksPushed: 0, totalBytesPushed: 0 }));
     } else {
-      // Stop Broadcast
       isBroadcastingRef.current = false;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         try {
@@ -454,7 +434,6 @@ export default function StreamStudio({
         } catch (e) {}
       }
 
-      // Signal backend stream end
       try {
         await fetch(`/api/stream/end/${roomId}`, { method: 'POST' });
       } catch (e) {}
@@ -464,22 +443,21 @@ export default function StreamStudio({
     }
   };
 
-  // 7. Uptime & Bitrate Telemetry Interval
+  // 6. Uptime & Bitrate Telemetry Interval
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (isLive) {
       interval = setInterval(() => {
         setUptimeSeconds(prev => prev + 1);
 
-        // Calculate upload bitrate over the last second
         const bitsPushed = bytesInIntervalRef.current * 8;
         bytesInIntervalRef.current = 0;
-        const kbps = Math.round(bitsPushed / 1000) || 1850;
+        const kbps = Math.round(bitsPushed / 1000) || 2200;
 
         setTelemetry(prev => ({
           ...prev,
           currentBitrateKbps: kbps,
-          fps: isScreenSharing ? 60 : 30
+          fps: 60
         }));
       }, 1000);
     } else {
@@ -489,9 +467,9 @@ export default function StreamStudio({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isLive, isScreenSharing]);
+  }, [isLive]);
 
-  // 8. Connect to Live Chat SSE Events
+  // 7. Connect to Live Chat SSE Events
   useEffect(() => {
     const sse = new EventSource(`/api/stream/chat/${roomId}/events`);
     sseRef.current = sse;
@@ -580,7 +558,6 @@ export default function StreamStudio({
     } catch (err) {}
   };
 
-  // Format seconds to hh:mm:ss
   const formatUptime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -616,9 +593,9 @@ export default function StreamStudio({
           <div className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse" />
             <h1 className="font-bold text-sm sm:text-base text-zinc-100 flex items-center gap-2">
-              <span>Creator Studio</span>
+              <span>Screen Streamer Studio</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-medium border border-indigo-500/30">
-                HLS 720p
+                1080p 60FPS
               </span>
             </h1>
           </div>
@@ -629,7 +606,7 @@ export default function StreamStudio({
           {isLive ? (
             <div className="flex items-center gap-2 px-3 py-1 bg-red-500/15 border border-red-500/40 text-red-400 rounded-full text-xs font-semibold">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-              <span>LIVE</span>
+              <span>LIVE BROADCAST</span>
               <span className="text-zinc-400 font-mono ml-1">
                 {formatUptime(uptimeSeconds)}
               </span>
@@ -722,15 +699,15 @@ export default function StreamStudio({
           {/* Main Video Monitor Stage */}
           <div className="flex-1 relative aspect-video bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl flex items-center justify-center min-h-[280px]">
             
-            {/* HTML5 Native Video Preview Element */}
+            {/* HTML5 Native Video Preview Element for Screen Share */}
             <video
               ref={previewVideoRef}
               autoPlay
               playsInline
               muted
               className={`w-full h-full object-contain ${
-                (!isCameraOn && !isScreenSharing) ? 'opacity-0' : 'opacity-100'
-              } transition-opacity duration-300`}
+                !isScreenSharing ? 'hidden' : 'block'
+              }`}
             />
 
             {/* Floating Live Reaction Particles */}
@@ -751,18 +728,25 @@ export default function StreamStudio({
               </AnimatePresence>
             </div>
 
-            {/* Camera Off Avatar Overlay */}
-            {!isCameraOn && !isScreenSharing && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/90 gap-3">
-                <UserAvatar
-                  name={currentUser?.displayName || 'Host'}
-                  avatarUrl={currentUser?.avatarUrl}
-                  size="xl"
-                />
-                <div className="text-center">
-                  <p className="text-sm font-semibold text-zinc-200">{currentUser?.displayName || 'Creator'}</p>
-                  <p className="text-xs text-zinc-500">Camera is turned off</p>
+            {/* Screen Share Prompt Overlay (When no screen is actively selected) */}
+            {!isScreenSharing && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/90 gap-4 p-6 text-center">
+                <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <Monitor className="w-10 h-10" />
                 </div>
+                <div className="max-w-md">
+                  <p className="text-base font-bold text-zinc-100">Ready to Share Your Screen</p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Select any Screen, Application Window, or Browser Tab to broadcast directly to your viewers.
+                  </p>
+                </div>
+                <button
+                  onClick={startScreenCapture}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-900/30 cursor-pointer transition-all hover:scale-105"
+                >
+                  <Monitor className="w-4 h-4" />
+                  <span>Choose Screen to Share</span>
+                </button>
               </div>
             )}
 
@@ -772,12 +756,12 @@ export default function StreamStudio({
                 {isScreenSharing ? (
                   <>
                     <Monitor className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Screen Share Active</span>
+                    <span>Screen Capture Active</span>
                   </>
                 ) : (
                   <>
-                    <Camera className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Camera (720p HD)</span>
+                    <MonitorOff className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Screen Capture Inactive</span>
                   </>
                 )}
               </div>
@@ -813,10 +797,10 @@ export default function StreamStudio({
             )}
           </div>
 
-          {/* 3. DEVICE CONTROLS BAR (Google Meet & OBS Studio Style) */}
+          {/* 3. DEVICE CONTROLS BAR */}
           <div className="h-16 px-4 bg-zinc-900 rounded-2xl border border-zinc-800 flex items-center justify-between flex-shrink-0 shadow-lg">
             
-            {/* Left Controls: Mic, Camera, Screen Share */}
+            {/* Left Controls: Mic & Screen Share (No Camera) */}
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Mic Toggle */}
               <button
@@ -829,33 +813,18 @@ export default function StreamStudio({
                 }`}
                 title={isMicOn ? 'Mute Microphone' : 'Unmute Microphone'}
               >
-                {isMicOn ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                {isMicOn ? <Mic className="w-5 h-5 text-emerald-400" /> : <MicOff className="w-5 h-5" />}
                 <span className="text-xs font-semibold hidden md:inline">{isMicOn ? 'Mic On' : 'Muted'}</span>
               </button>
 
-              {/* Camera Toggle */}
-              <button
-                id="studio-cam-toggle-btn"
-                onClick={toggleCamera}
-                className={`p-3 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
-                  isCameraOn
-                    ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700'
-                    : 'bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30'
-                }`}
-                title={isCameraOn ? 'Turn Camera Off' : 'Turn Camera On'}
-              >
-                {isCameraOn ? <Camera className="w-5 h-5" /> : <CameraOff className="w-5 h-5" />}
-                <span className="text-xs font-semibold hidden md:inline">{isCameraOn ? 'Cam On' : 'Cam Off'}</span>
-              </button>
-
-              {/* Screen Share (Desktop Picker) */}
+              {/* Screen Share (Direct native picker) */}
               <button
                 id="studio-screen-share-btn"
-                onClick={toggleScreenShare}
+                onClick={isScreenSharing ? stopScreenSharing : startScreenCapture}
                 className={`p-3 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
                   isScreenSharing
                     ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20'
-                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/30'
                 }`}
                 title={isScreenSharing ? 'Stop Screen Sharing' : 'Share Screen / Window'}
               >
@@ -897,7 +866,7 @@ export default function StreamStudio({
           </div>
         </div>
 
-        {/* 4. RIGHT SIDEBAR: LIVE CHAT & AUDIENCE INTERACTION */}
+        {/* 4. RIGHT SIDEBAR: LIVE CHAT */}
         {isChatOpen && (
           <aside className="w-80 sm:w-88 bg-zinc-900 border-l border-zinc-800 flex flex-col flex-shrink-0 z-10">
             {/* Chat Header */}
@@ -920,7 +889,7 @@ export default function StreamStudio({
             {/* Chat Messages Stream */}
             <div className="flex-1 p-3 overflow-y-auto space-y-2.5 text-xs">
               <div className="p-2.5 bg-indigo-950/30 border border-indigo-800/40 rounded-xl text-indigo-300 text-[11px] leading-relaxed">
-                👋 Welcome to your broadcast! Viewers watching via HLS can chat and send real-time emoji reactions here.
+                👋 Welcome to your screen broadcast! Viewers watching via HLS can chat and send real-time emoji reactions here.
               </div>
 
               {chatMessages.map((msg) => (
@@ -966,7 +935,7 @@ export default function StreamStudio({
           </aside>
         )}
 
-        {/* 5. STREAM SETTINGS MODAL / SLIDEOUT */}
+        {/* 5. STREAM SETTINGS MODAL */}
         {isSettingsOpen && (
           <div className="absolute inset-0 bg-zinc-950/70 backdrop-blur-sm z-30 flex items-center justify-center p-4">
             <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl p-6 space-y-4">
@@ -1020,10 +989,10 @@ export default function StreamStudio({
                 </div>
 
                 <div className="p-3 bg-zinc-950 rounded-xl border border-zinc-800/80 space-y-1.5">
-                  <p className="text-[11px] font-semibold text-zinc-300">HLS Ingest & Delivery Specs:</p>
-                  <p className="text-[11px] text-zinc-500 font-mono">Format: 2-second WebM / HLS sliding segments</p>
-                  <p className="text-[11px] text-zinc-500 font-mono">Playlist: /api/stream/playlist/{roomId}.m3u8</p>
-                  <p className="text-[11px] text-zinc-500 font-mono">Memory / Disk: Automatic purge &lt; 100MB</p>
+                  <p className="text-[11px] font-semibold text-zinc-300">Screen Capture Specs:</p>
+                  <p className="text-[11px] text-zinc-500 font-mono">Source: DisplayMedia (Screen / Window / Tab)</p>
+                  <p className="text-[11px] text-zinc-500 font-mono">Audio: Screen Audio + Microphone Mixed</p>
+                  <p className="text-[11px] text-zinc-500 font-mono">HLS Ingest: 2-second segments with Live Playlist</p>
                 </div>
               </div>
 

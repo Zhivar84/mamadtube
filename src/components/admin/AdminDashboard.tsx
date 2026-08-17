@@ -123,7 +123,7 @@ export default function AdminDashboard() {
     deleteUser 
   } = useApp();
 
-  const [usersList, setUsersList] = useState<UserProfile[]>(() => getAllRegisteredUsers());
+  const [usersList, setUsersList] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'pending' | 'approved' | 'banned' | 'rejected'>('all');
   
@@ -161,30 +161,39 @@ export default function AdminDashboard() {
   const refreshUsers = async (silent: boolean = false) => {
     if (!silent) setIsRefreshing(true);
     try {
-      if (fetchAdminUsers) {
-        const list = await fetchAdminUsers();
-        if (Array.isArray(list) && list.length > 0) {
-          setUsersList(list);
-          return;
-        }
+      const res = await fetch('/api/admin/users');
+      if (res.ok) {
+        const data = await res.json();
+        const rawList = Array.isArray(data) ? data : (data.users || []);
+        const mappedUsers: UserProfile[] = rawList.map((u: any) => ({
+          id: u.id,
+          email: u.email,
+          displayName: u.displayName || u.username || 'User',
+          handle: u.handle || `@${u.username || 'user'}`,
+          avatarUrl: u.avatarUrl || '',
+          bio: u.bio || '',
+          badge: u.badge || 'verified',
+          role: u.role || 'user',
+          status: u.status || 'pending',
+          createdAt: u.createdAt || new Date().toISOString(),
+        }));
+        setUsersList(mappedUsers);
       }
-      const list = getAllRegisteredUsers();
-      setUsersList(list);
     } catch (err: any) {
-      console.error('Failed to load users:', err);
+      console.error('Failed to load users from VPS server:', err);
     } finally {
       if (!silent) {
-        setTimeout(() => setIsRefreshing(false), 300);
+        setTimeout(() => setIsRefreshing(false), 200);
       }
     }
   };
 
   useEffect(() => {
     refreshUsers();
-    // 10-second automatic polling to sync new registrations in real time
+    // 5-second automatic polling to sync new registrations from VPS disk in real time
     const interval = setInterval(() => {
       refreshUsers(true);
-    }, 10000);
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
