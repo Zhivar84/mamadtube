@@ -1,0 +1,40 @@
+{
+  "folders": [
+    {
+      "id": "folder-docs",
+      "name": "Documentation & Guides",
+      "parentId": null,
+      "color": "#6366F1",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    },
+    {
+      "id": "folder-media",
+      "name": "Media Assets",
+      "parentId": null,
+      "color": "#EC4899",
+      "createdAt": "2026-01-01",
+      "updatedAt": "2026-01-01"
+    }
+  ],
+  "files": [
+    {
+      "id": "file-guide-01",
+      "name": "Platform_Overview.md",
+      "size": 2048,
+      "formattedSize": "2.0 KB",
+      "category": "document",
+      "mimeType": "text/markdown",
+      "extension": "md",
+      "folderId": "folder-docs",
+      "createdAt": "Jan 15, 2026",
+      "updatedAt": "Just now",
+      "isFavorite": true,
+      "tags": [
+        "DOCS",
+        "MAMADTUBE"
+      ],
+      "content": "# mamadtube Unified Suite\n\n- Full-stack unified persistent JSON storage (/data)\n- WebRTC Live Video SFU\n- Real-time Direct & Group Chat\n- Cloud Vault and Drag-and-Drop Archive\n- Social Feed with Live Polls"
+    }
+  ]
+}

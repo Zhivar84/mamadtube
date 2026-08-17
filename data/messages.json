@@ -1,0 +1,50 @@
+{
+  "conversations": [
+    {
+      "id": "conv_admin_welcome",
+      "type": "direct",
+      "name": "System Admin",
+      "avatar": "",
+      "description": "Direct communication with System Administrator",
+      "participants": [
+        {
+          "id": "usr_master_admin",
+          "name": "System Admin",
+          "handle": "@admin",
+          "avatar": "",
+          "status": "online",
+          "role": "admin",
+          "customStatus": "Master Administrator"
+        }
+      ],
+      "unreadCount": 0,
+      "lastMessage": {
+        "id": "msg_init_01",
+        "senderId": "usr_master_admin",
+        "senderName": "System Admin",
+        "text": "Welcome to mamadtube. How can we assist you today?",
+        "timestamp": 1786981262447,
+        "formattedTime": "03:41 PM",
+        "deliveryStatus": "delivered"
+      },
+      "pinnedMessageIds": [],
+      "isMuted": false
+    }
+  ],
+  "messages": {
+    "conv_admin_welcome": [
+      {
+        "id": "msg_init_01",
+        "conversationId": "conv_admin_welcome",
+        "senderId": "usr_master_admin",
+        "senderName": "System Admin",
+        "senderAvatar": "",
+        "content": "Welcome to mamadtube. How can we assist you today?",
+        "timestamp": 1786981262462,
+        "formattedTime": "03:41 PM",
+        "deliveryStatus": "delivered",
+        "reactions": []
+      }
+    ]
+  }
+}

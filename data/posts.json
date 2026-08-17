@@ -1,0 +1,73 @@
+[
+  {
+    "id": "post_welcome_01",
+    "authorId": "usr_master_admin",
+    "authorName": "System Admin",
+    "authorHandle": "@admin",
+    "authorAvatar": "",
+    "authorBadge": "verified",
+    "createdAt": "Just now",
+    "timestamp": 1786981262447,
+    "caption": "Welcome to mamadtube! Experience zero-transcode WebRTC live broadcasting, persistent cloud storage archive, encrypted peer communications, and social interactions with interactive polls.",
+    "media": [],
+    "tags": [
+      "MAMADTUBE",
+      "RELEASE",
+      "FULLSTACK",
+      "WEBRTC"
+    ],
+    "likesCount": 12,
+    "likedBy": [],
+    "isLiked": false,
+    "isBookmarked": false,
+    "bookmarkedBy": [],
+    "commentsCount": 1,
+    "sharesCount": 4,
+    "repostsCount": 3,
+    "repostedByUserIds": [],
+    "poll": {
+      "id": "poll_welcome_01",
+      "question": "Which native module do you use the most?",
+      "options": [
+        {
+          "id": "opt_1",
+          "text": "Live SFU WebRTC Streaming",
+          "votes": [
+            "usr_master_admin"
+          ]
+        },
+        {
+          "id": "opt_2",
+          "text": "Encrypted Cloud Archive & Vault",
+          "votes": []
+        },
+        {
+          "id": "opt_3",
+          "text": "Direct Chat & Voice Notes",
+          "votes": []
+        },
+        {
+          "id": "opt_4",
+          "text": "Social Hub & Poll Feeds",
+          "votes": []
+        }
+      ],
+      "totalVotes": 1
+    },
+    "comments": [
+      {
+        "id": "cmt_01",
+        "authorId": "usr_master_admin",
+        "authorName": "System Admin",
+        "authorHandle": "@admin",
+        "authorAvatar": "",
+        "authorBadge": "verified",
+        "content": "Feel free to test file uploads, stream live from your browser, or start a peer conversation!",
+        "createdAt": "Just now",
+        "timestamp": 1786981262447,
+        "likesCount": 2,
+        "replies": []
+      }
+    ]
+  }
+]

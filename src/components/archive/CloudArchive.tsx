@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Folder, FolderPlus, FolderOpen, Grid, List, Search, Filter, 
@@ -19,37 +19,33 @@ import UploadDropzone from './UploadDropzone';
 import FilePreviewModal from './FilePreviewModal';
 import { CreateFolderModal, RenameModal, DeleteConfirmModal, ShareLinkModal } from './FileActionModals';
 
-const STORAGE_FILES_KEY = 'mamadtube_archive_files_v2';
-const STORAGE_FOLDERS_KEY = 'mamadtube_archive_folders_v2';
-
 export default function CloudArchive() {
   // Persistence state
-  const [files, setFiles] = useState<ArchiveFile[]>(() => {
+  const [files, setFiles] = useState<ArchiveFile[]>([]);
+  const [folders, setFolders] = useState<ArchiveFolder[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadArchiveData = useCallback(async () => {
     try {
-      const saved = localStorage.getItem(STORAGE_FILES_KEY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+      setIsLoading(true);
+      const res = await fetch('/api/archive/files');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setFiles(data.files || []);
+          setFolders(data.folders || []);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching archive files:', err);
+    } finally {
+      setIsLoading(false);
     }
-  });
-
-  const [folders, setFolders] = useState<ArchiveFolder[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_FOLDERS_KEY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Sync to local storage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_FILES_KEY, JSON.stringify(files));
-  }, [files]);
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_FOLDERS_KEY, JSON.stringify(folders));
-  }, [folders]);
+    loadArchiveData();
+  }, [loadArchiveData]);
 
   // Navigation & Filtering state
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -155,54 +151,100 @@ export default function CloudArchive() {
   }, [files, currentFolderId, activeCategory, searchQuery, sortBy]);
 
   // Handlers
-  const handleCreateFolder = (name: string, color: string) => {
-    const newFolder: ArchiveFolder = {
-      id: `folder-${Date.now()}`,
-      name,
-      parentId: currentFolderId,
-      color,
-      createdAt: new Date().toISOString().split('T')[0],
-      updatedAt: new Date().toISOString().split('T')[0],
-    };
-    setFolders((prev) => [...prev, newFolder]);
+  const handleCreateFolder = async (name: string, color: string) => {
+    try {
+      const res = await fetch('/api/archive/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          color,
+          parentId: currentFolderId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.folder) {
+          setFolders((prev) => [...prev, data.folder]);
+        }
+      }
+    } catch (err) {
+      console.error('Error creating folder:', err);
+    }
     showToast(`Folder "${name}" created`);
   };
 
-  const handleRename = (id: string, newName: string) => {
-    if (renameType === 'file') {
-      setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName, updatedAt: 'Just now' } : f)));
-      showToast(`File renamed to "${newName}"`);
-    } else {
-      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName, updatedAt: 'Just now' } : f)));
-      showToast(`Folder renamed to "${newName}"`);
+  const handleRename = async (id: string, newName: string) => {
+    try {
+      if (renameType === 'file') {
+        setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName, updatedAt: 'Just now' } : f)));
+        await fetch(`/api/archive/files/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+        showToast(`File renamed to "${newName}"`);
+      } else {
+        setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: newName, updatedAt: 'Just now' } : f)));
+        await fetch(`/api/archive/folders/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+        showToast(`Folder renamed to "${newName}"`);
+      }
+    } catch (err) {
+      console.error('Error renaming item:', err);
     }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
-    if (deleteType === 'file') {
-      setFiles((prev) => prev.filter((f) => f.id !== deleteTarget.id));
-      if (previewFile?.id === deleteTarget.id) setPreviewFile(null);
-      showToast(`Deleted file "${deleteTarget.name}"`);
-    } else {
-      // Delete folder and its nested items or set them to root
-      setFolders((prev) => prev.filter((f) => f.id !== deleteTarget.id));
-      setFiles((prev) => prev.filter((f) => f.folderId !== deleteTarget.id));
-      if (currentFolderId === deleteTarget.id) setCurrentFolderId(null);
-      showToast(`Deleted folder "${deleteTarget.name}"`);
+    try {
+      if (deleteType === 'file') {
+        setFiles((prev) => prev.filter((f) => f.id !== deleteTarget.id));
+        if (previewFile?.id === deleteTarget.id) setPreviewFile(null);
+        await fetch(`/api/archive/files/${deleteTarget.id}`, { method: 'DELETE' });
+        showToast(`Deleted file "${deleteTarget.name}"`);
+      } else {
+        setFolders((prev) => prev.filter((f) => f.id !== deleteTarget.id));
+        setFiles((prev) => prev.filter((f) => f.folderId !== deleteTarget.id));
+        if (currentFolderId === deleteTarget.id) setCurrentFolderId(null);
+        await fetch(`/api/archive/folders/${deleteTarget.id}`, { method: 'DELETE' });
+        showToast(`Deleted folder "${deleteTarget.name}"`);
+      }
+    } catch (err) {
+      console.error('Error deleting item:', err);
     }
     setDeleteTarget(null);
   };
 
-  const handleToggleFavorite = (fileId: string, e: React.MouseEvent) => {
+  const handleToggleFavorite = async (fileId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const targetFile = files.find((f) => f.id === fileId);
+    const newFavState = !targetFile?.isFavorite;
+
     setFiles((prev) =>
-      prev.map((f) => (f.id === fileId ? { ...f, isFavorite: !f.isFavorite } : f))
+      prev.map((f) => (f.id === fileId ? { ...f, isFavorite: newFavState } : f))
     );
+
+    try {
+      await fetch(`/api/archive/files/${fileId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFavorite: newFavState }),
+      });
+    } catch (err) {
+      console.error('Error toggling favorite:', err);
+    }
   };
 
   const handleNewFilesUploaded = (newFiles: ArchiveFile[]) => {
-    setFiles((prev) => [...newFiles, ...prev]);
+    setFiles((prev) => {
+      const existingIds = new Set(prev.map(f => f.id));
+      const filteredNew = newFiles.filter(f => !existingIds.has(f.id));
+      return [...filteredNew, ...prev];
+    });
     showToast(`${newFiles.length} file(s) added to Archive`);
   };
 

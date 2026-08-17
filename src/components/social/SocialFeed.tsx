@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Plus, 
   Sparkles, 
@@ -26,20 +26,12 @@ import {
   TrendingTopic, 
   RecommendedUser 
 } from '../../types/social';
-import { 
-  INITIAL_SOCIAL_POSTS, 
-  TRENDING_TOPICS, 
-  RECOMMENDED_USERS 
-} from '../../data/socialSeedData';
 import { useApp } from '../../context/AppContext';
 import TweetComposer from './TweetComposer';
 import TweetCard from './TweetCard';
 import TweetDetailThread from './TweetDetailThread';
 import RightSidebar from './RightSidebar';
 import UserAvatar from '../common/UserAvatar';
-
-const STORAGE_KEY_POSTS = 'mamadtube_social_posts_v3';
-const STORAGE_KEY_FOLLOWS = 'mamadtube_social_follows_v3';
 
 export default function SocialFeed() {
   const { auth } = useApp();
@@ -63,41 +55,9 @@ export default function SocialFeed() {
     postsCount: 0,
   };
 
-  const [posts, setPosts] = useState<SocialPost[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_POSTS);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error('Failed to load saved social posts', e);
-    }
-    return [];
-  });
-
-  const [recommendedUsers, setRecommendedUsers] = useState<RecommendedUser[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_FOLLOWS);
-      if (saved) return JSON.parse(saved);
-      // Populate from registered users if available
-      const registered = localStorage.getItem('portal_registered_users');
-      if (registered) {
-        const users = JSON.parse(registered);
-        return users
-          .filter((u: any) => u.id !== authUser?.id && u.email !== authUser?.email)
-          .map((u: any) => ({
-            id: u.id,
-            name: u.displayName,
-            handle: u.handle,
-            avatarUrl: u.avatarUrl,
-            bio: u.bio || 'Hub Community Member',
-            badge: u.badge || 'verified',
-            isFollowing: false,
-          }));
-      }
-    } catch (e) {
-      console.error('Failed to load recommended users', e);
-    }
-    return [];
-  });
+  const [posts, setPosts] = useState<SocialPost[]>([]);
+  const [isLoadingPosts, setIsLoadingPosts] = useState(true);
+  const [recommendedUsers, setRecommendedUsers] = useState<RecommendedUser[]>([]);
 
   // Navigation & Filter States
   const [activeTab, setActiveTab] = useState<'for_you' | 'following' | 'bookmarks'>('for_you');
@@ -109,22 +69,66 @@ export default function SocialFeed() {
   const [visibleCount, setVisibleCount] = useState(10);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  // Sync to LocalStorage
-  useEffect(() => {
+  // Fetch real posts from server
+  const loadPosts = useCallback(async () => {
     try {
-      localStorage.setItem(STORAGE_KEY_POSTS, JSON.stringify(posts));
-    } catch (e) {
-      console.error('Failed to persist social posts', e);
+      setIsLoadingPosts(true);
+      const params = new URLSearchParams();
+      if (currentUser.id) params.append('userId', currentUser.id);
+      if (selectedTag) params.append('tag', selectedTag);
+      if (searchQuery.trim()) params.append('search', searchQuery.trim());
+
+      const res = await fetch(`/api/social/posts?${params.toString()}`);
+      if (!res.ok) throw new Error('Failed to fetch posts');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.posts)) {
+        setPosts(data.posts);
+      }
+    } catch (err) {
+      console.error('Error loading posts from server:', err);
+    } finally {
+      setIsLoadingPosts(false);
     }
-  }, [posts]);
+  }, [currentUser.id, selectedTag, searchQuery]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_FOLLOWS, JSON.stringify(recommendedUsers));
-    } catch (e) {
-      console.error('Failed to persist recommended users', e);
-    }
-  }, [recommendedUsers]);
+    loadPosts();
+  }, [loadPosts]);
+
+  // Fetch registered users dynamically from server
+  useEffect(() => {
+    let isMounted = true;
+    fetch('/api/users')
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (isMounted && data && data.success && Array.isArray(data.users)) {
+          setRecommendedUsers((prev) => {
+            const followMap = new Map(prev.map((p) => [p.id, p.isFollowing]));
+            return data.users
+              .filter((u: any) => u.id !== authUser?.id && u.email !== authUser?.email && u.status !== 'banned')
+              .map((u: any) => ({
+                id: u.id,
+                name: u.displayName || u.username || 'User',
+                handle: u.handle || `@${(u.username || u.displayName || 'user').toLowerCase().replace(/\s+/g, '')}`,
+                avatarUrl: u.avatarUrl || '',
+                bio: u.bio || 'Hub Community Member',
+                badge: u.badge || 'verified',
+                isFollowing: Boolean(followMap.get(u.id)),
+              }));
+          });
+        }
+      })
+      .catch((err) => console.warn('Could not load social peers:', err));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser?.id, authUser?.email]);
 
   // Handle URL hashtag or route params if any
   const selectedPost = posts.find((p) => p.id === selectedPostId);
@@ -176,39 +180,45 @@ export default function SocialFeed() {
   };
 
   // Action Handlers
-  const handleCreatePost = (newPostData: Partial<SocialPost>) => {
-    const newPost: SocialPost = {
-      id: 'tweet_' + Date.now(),
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      authorHandle: currentUser.handle,
-      authorAvatar: currentUser.avatarUrl,
-      authorBadge: currentUser.badge,
-      createdAt: 'Just now',
-      timestamp: Date.now(),
-      caption: newPostData.caption || '',
-      media: newPostData.media || [],
-      tags: newPostData.tags || [],
-      likesCount: 0,
-      isLiked: false,
-      isBookmarked: false,
-      repostsCount: 0,
-      isReposted: false,
-      commentsCount: 0,
-      sharesCount: 0,
-      poll: newPostData.poll,
-      quotedPost: quoteTargetPost || undefined,
-      replyToId: newPostData.replyToId,
-      replyToHandle: newPostData.replyToHandle,
-      comments: [],
-    };
+  const handleCreatePost = async (newPostData: Partial<SocialPost>) => {
+    try {
+      const payload = {
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        authorHandle: currentUser.handle,
+        authorAvatar: currentUser.avatarUrl,
+        authorBadge: currentUser.badge,
+        caption: newPostData.caption || '',
+        media: newPostData.media || [],
+        tags: newPostData.tags || [],
+        poll: newPostData.poll,
+        quotedPost: quoteTargetPost || undefined,
+        replyToId: newPostData.replyToId,
+        replyToHandle: newPostData.replyToHandle,
+      };
 
-    setPosts((prev) => [newPost, ...prev]);
-    setQuoteTargetPost(null);
-    setIsMobileComposerOpen(false);
+      const res = await fetch('/api/social/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.post) {
+          setPosts((prev) => [data.post, ...prev]);
+        }
+      }
+    } catch (err) {
+      console.error('Error creating post:', err);
+    } finally {
+      setQuoteTargetPost(null);
+      setIsMobileComposerOpen(false);
+    }
   };
 
-  const handleLikeToggle = (postId: string) => {
+  const handleLikeToggle = async (postId: string) => {
+    // Optimistic UI update
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId) {
@@ -222,9 +232,19 @@ export default function SocialFeed() {
         return p;
       })
     );
+
+    try {
+      await fetch(`/api/social/posts/${postId}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+    } catch (err) {
+      console.error('Error toggling like:', err);
+    }
   };
 
-  const handleBookmarkToggle = (postId: string) => {
+  const handleBookmarkToggle = async (postId: string) => {
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId) {
@@ -233,9 +253,19 @@ export default function SocialFeed() {
         return p;
       })
     );
+
+    try {
+      await fetch(`/api/social/posts/${postId}/bookmark`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+    } catch (err) {
+      console.error('Error toggling bookmark:', err);
+    }
   };
 
-  const handleRepost = (postId: string) => {
+  const handleRepost = async (postId: string) => {
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId) {
@@ -252,6 +282,20 @@ export default function SocialFeed() {
         return p;
       })
     );
+
+    try {
+      await fetch(`/api/social/posts/${postId}/repost`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          userName: currentUser.name,
+          userHandle: currentUser.handle,
+        }),
+      });
+    } catch (err) {
+      console.error('Error reposting:', err);
+    }
   };
 
   const handleQuotePost = (postToQuote: SocialPost) => {
@@ -259,35 +303,35 @@ export default function SocialFeed() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleDeletePost = (postId: string) => {
+  const handleDeletePost = async (postId: string) => {
     setPosts((prev) => prev.filter((p) => p.id !== postId));
     if (selectedPostId === postId) {
       setSelectedPostId(null);
     }
+
+    try {
+      await fetch(`/api/social/posts/${postId}`, {
+        method: 'DELETE',
+      });
+    } catch (err) {
+      console.error('Error deleting post:', err);
+    }
   };
 
-  const handleVotePoll = (postId: string, optionId: string) => {
+  const handleVotePoll = async (postId: string, optionId: string) => {
     const userId = currentUser.id;
+
+    // Optimistic UI update
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId && p.poll) {
-          // Check if current user already voted in ANY option
-          const alreadyVoted = p.poll.options.some((opt) =>
-            Array.isArray(opt.votes) && (opt.votes.includes(userId) || opt.votes.includes(currentUser.handle))
-          );
-          if (alreadyVoted) return p;
-
           const updatedOptions = p.poll.options.map((opt) => {
-            const currentVotes: string[] = Array.isArray(opt.votes)
-              ? opt.votes
-              : typeof (opt as any).votes === 'number'
-              ? Array((opt as any).votes).fill('legacy_user')
-              : [];
-
+            const currentVotes: string[] = Array.isArray(opt.votes) ? opt.votes : [];
+            const cleanVotes = currentVotes.filter((uId) => uId !== userId);
             if (opt.id === optionId) {
-              return { ...opt, votes: [...currentVotes, userId] };
+              return { ...opt, votes: [...cleanVotes, userId] };
             }
-            return { ...opt, votes: currentVotes };
+            return { ...opt, votes: cleanVotes };
           });
 
           const newTotalVotes = updatedOptions.reduce(
@@ -307,36 +351,50 @@ export default function SocialFeed() {
         return p;
       })
     );
+
+    try {
+      const res = await fetch(`/api/social/posts/${postId}/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, optionId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.post) {
+          setPosts((prev) => prev.map((p) => (p.id === postId ? data.post : p)));
+        }
+      }
+    } catch (err) {
+      console.error('Error voting on poll:', err);
+    }
   };
 
-  const handleAddComment = (postId: string, commentText: string) => {
-    const newComment = {
-      id: 'c_' + Date.now(),
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      authorHandle: currentUser.handle,
-      authorAvatar: currentUser.avatarUrl,
-      authorBadge: currentUser.badge,
-      content: commentText,
-      createdAt: 'Just now',
-      timestamp: Date.now(),
-      likesCount: 0,
-      isLiked: false,
-      replies: [],
-    };
+  const handleAddComment = async (postId: string, commentText: string) => {
+    try {
+      const payload = {
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        authorHandle: currentUser.handle,
+        authorAvatar: currentUser.avatarUrl,
+        authorBadge: currentUser.badge,
+        content: commentText,
+      };
 
-    setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id === postId) {
-          return {
-            ...p,
-            commentsCount: (p.commentsCount || 0) + 1,
-            comments: [newComment, ...(p.comments || [])],
-          };
+      const res = await fetch(`/api/social/posts/${postId}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.post) {
+          setPosts((prev) => prev.map((p) => (p.id === postId ? data.post : p)));
         }
-        return p;
-      })
-    );
+      }
+    } catch (err) {
+      console.error('Error adding comment:', err);
+    }
   };
 
   const handleLikeComment = (postId: string, commentId: string) => {
@@ -363,41 +421,33 @@ export default function SocialFeed() {
     );
   };
 
-  const handleAddCommentReply = (postId: string, commentId: string, replyText: string) => {
-    const newReply = {
-      id: 'r_' + Date.now(),
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      authorHandle: currentUser.handle,
-      authorAvatar: currentUser.avatarUrl,
-      authorBadge: currentUser.badge,
-      content: replyText,
-      createdAt: 'Just now',
-      timestamp: Date.now(),
-      likesCount: 0,
-      isLiked: false,
-    };
+  const handleAddCommentReply = async (postId: string, commentId: string, replyText: string) => {
+    try {
+      const payload = {
+        authorId: currentUser.id,
+        authorName: currentUser.name,
+        authorHandle: currentUser.handle,
+        authorAvatar: currentUser.avatarUrl,
+        authorBadge: currentUser.badge,
+        content: replyText,
+        replyToCommentId: commentId,
+      };
 
-    setPosts((prev) =>
-      prev.map((p) => {
-        if (p.id === postId) {
-          return {
-            ...p,
-            commentsCount: (p.commentsCount || 0) + 1,
-            comments: (p.comments || []).map((c) => {
-              if (c.id === commentId) {
-                return {
-                  ...c,
-                  replies: [...(c.replies || []), newReply],
-                };
-              }
-              return c;
-            }),
-          };
+      const res = await fetch(`/api/social/posts/${postId}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.post) {
+          setPosts((prev) => prev.map((p) => (p.id === postId ? data.post : p)));
         }
-        return p;
-      })
-    );
+      }
+    } catch (err) {
+      console.error('Error adding comment reply:', err);
+    }
   };
 
   const handleToggleFollowUser = (userId: string) => {
@@ -420,6 +470,27 @@ export default function SocialFeed() {
     setSearchQuery(handle);
     setSelectedPostId(null);
   };
+
+  const dynamicTrendingTopics: TrendingTopic[] = React.useMemo(() => {
+    const tagMap = new Map<string, number>();
+    posts.forEach((p) => {
+      p.tags?.forEach((t) => {
+        const clean = t.toLowerCase().replace(/^#/, '');
+        tagMap.set(clean, (tagMap.get(clean) || 0) + 1);
+      });
+    });
+    return Array.from(tagMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([tag, count], idx) => ({
+        id: `trend_${idx}_${tag}`,
+        topic: `#${tag}`,
+        tag: `#${tag}`,
+        postsCount: count,
+        postsCountFormatted: `${count} post${count > 1 ? 's' : ''}`,
+        category: 'Trending in Tech',
+      }));
+  }, [posts]);
 
   return (
     <div className="flex justify-center min-h-screen bg-zinc-950 text-zinc-100 font-sans">
@@ -644,7 +715,7 @@ export default function SocialFeed() {
       <RightSidebar
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        trendingTopics={TRENDING_TOPICS}
+        trendingTopics={dynamicTrendingTopics}
         recommendedUsers={recommendedUsers}
         onSelectTag={handleSelectTag}
         onToggleFollowUser={handleToggleFollowUser}

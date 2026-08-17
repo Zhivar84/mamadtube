@@ -53,28 +53,39 @@ export default function ChatSidebar({
 
   const isAdmin = currentUser.role === 'admin';
 
-  // Load all registered users for global user search
-  const registeredUsers: ChatUser[] = useMemo(() => {
-    try {
-      const saved = localStorage.getItem('portal_registered_users');
-      if (saved) {
-        const users = JSON.parse(saved);
-        return users
-          .filter((u: any) => u.id !== currentUser.id && u.email !== currentUser.id)
-          .map((u: any) => ({
-            id: u.id || 'usr_' + u.email,
-            name: u.displayName,
-            handle: u.handle || `@${u.displayName.toLowerCase().replace(/\s+/g, '')}`,
-            avatar: u.avatarUrl || '',
-            status: 'online' as const,
-            customStatus: u.bio || 'Available',
-            role: u.role
-          }));
-      }
-    } catch {
-      // fallback
-    }
-    return [];
+  const [registeredUsers, setRegisteredUsers] = useState<ChatUser[]>([]);
+
+  // Load all registered users from server for global user search
+  React.useEffect(() => {
+    let isMounted = true;
+    fetch('/api/users')
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const ct = res.headers.get('content-type');
+        if (!ct || !ct.includes('application/json')) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (isMounted && data && data.success && Array.isArray(data.users)) {
+          const peers: ChatUser[] = data.users
+            .filter((u: any) => u.id !== currentUser.id && u.email !== currentUser.id && u.status !== 'banned')
+            .map((u: any) => ({
+              id: u.id,
+              name: u.displayName || u.username || 'User',
+              handle: u.handle || `@${(u.username || u.displayName || 'user').toLowerCase().replace(/\s+/g, '')}`,
+              avatar: u.avatarUrl || '',
+              status: 'online' as const,
+              customStatus: u.bio || 'Available',
+              role: u.role
+            }));
+          setRegisteredUsers(peers);
+        }
+      })
+      .catch((err) => console.warn('Could not load chat directory users:', err));
+
+    return () => {
+      isMounted = false;
+    };
   }, [currentUser]);
 
   // Filter conversations by search and type

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { AppRoute } from '../types';
 import { motion } from 'motion/react';
@@ -31,6 +32,46 @@ export default function Dashboard() {
   const { auth, navigateTo } = useApp();
   const user = auth.user;
 
+  const [counts, setCounts] = useState({
+    activeStreams: 0,
+    filesCount: 0,
+    foldersCount: 0,
+    postsCount: 0,
+    conversationsCount: 0,
+    usersCount: 0,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCounts = async () => {
+      try {
+        const res = await fetch('/api/system/counts');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.success) {
+            setCounts({
+              activeStreams: data.activeStreams || 0,
+              filesCount: data.filesCount || 0,
+              foldersCount: data.foldersCount || 0,
+              postsCount: data.postsCount || 0,
+              conversationsCount: data.conversationsCount || 0,
+              usersCount: data.usersCount || 0,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load system counts:', err);
+      }
+    };
+
+    fetchCounts();
+    const interval = setInterval(fetchCounts, 6000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
   // Generate localized greeting based on time of day
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -41,22 +82,10 @@ export default function Dashboard() {
 
   if (!user) return null;
 
-  // Dynamic metrics from actual local storage
-  const getStoredCount = (key: string) => {
-    try {
-      const data = localStorage.getItem(key);
-      if (data) {
-        const parsed = JSON.parse(data);
-        return Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
-      }
-    } catch {}
-    return 0;
-  };
-
-  const streamCount = getStoredCount('mamadtube_live_streams_v2');
-  const filesCount = getStoredCount('mamadtube_archive_files_v2');
-  const postsCount = getStoredCount('mamadtube_social_posts_v3');
-  const chatCount = getStoredCount('mamadtube_conversations_v3');
+  const streamCount = counts.activeStreams;
+  const filesCount = counts.filesCount;
+  const postsCount = counts.postsCount;
+  const chatCount = counts.conversationsCount;
 
   const modules = [
     {

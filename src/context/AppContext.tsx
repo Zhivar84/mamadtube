@@ -108,39 +108,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Initial authentication restore and sync path
   useEffect(() => {
     const initializeAuth = async () => {
-      // Initialize registered users in local storage if not present
-      const existingUsersStr = localStorage.getItem('portal_registered_users');
-      let registeredUsers: any[] = [];
-
-      if (!existingUsersStr) {
-        registeredUsers = [MASTER_ADMIN_SEED];
-        localStorage.setItem('portal_registered_users', JSON.stringify(registeredUsers));
-      } else {
-        try {
-          registeredUsers = JSON.parse(existingUsersStr);
-          if (!Array.isArray(registeredUsers)) registeredUsers = [];
-        } catch {
-          registeredUsers = [MASTER_ADMIN_SEED];
-        }
-
-        // Ensure master admin exists
-        const hasAdmin = registeredUsers.some((u) => u.role === 'admin' || isDefaultAdminEmail(u.email));
-        if (!hasAdmin) {
-          registeredUsers.unshift(MASTER_ADMIN_SEED);
-          localStorage.setItem('portal_registered_users', JSON.stringify(registeredUsers));
-        }
-      }
-
       // Check for active session
       const activeSession = localStorage.getItem('portal_active_session');
       if (activeSession) {
         try {
           const user = JSON.parse(activeSession) as UserProfile;
 
-          // Try to get fresh status from server
+          // Query fresh status and role from server
           let serverUser: UserProfile | null = null;
           try {
-            const res = await fetch(`/api/auth/user/${user.id || user.email}`);
+            const res = await fetch(`/api/auth/user/${encodeURIComponent(user.id || user.email)}`);
             if (res.ok) {
               const data = await res.json();
               if (data.success && data.user) {
@@ -148,28 +125,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             }
           } catch (netErr) {
-            // Ignore server offline error during init
+            console.warn('Could not contact auth server during init:', netErr);
           }
 
-          // Match with server or live registered users data for newest role & status
-          const liveUser = serverUser || registeredUsers.find(
-            (u) => (user.id && u.id === user.id) || (user.email && u.email?.toLowerCase() === user.email.toLowerCase())
-          );
-
-          const role: UserRole = liveUser?.role || (isDefaultAdminEmail(user.email) ? 'admin' : (user.role || 'user'));
-          const status: UserStatus = liveUser?.status || (role === 'admin' ? 'approved' : (user.status || 'approved'));
+          const liveUser = serverUser || user;
+          const isAdmin = isDefaultAdminEmail(liveUser.email) || liveUser.role === 'admin';
+          const role: UserRole = isAdmin ? 'admin' : (liveUser.role || 'user');
+          const status: UserStatus = isAdmin ? 'approved' : (liveUser.status || 'approved');
 
           const updatedUser: UserProfile = {
-            id: liveUser?.id || user.id || ('usr_' + (user.email ? user.email.split('@')[0] : 'user')),
-            email: user.email,
-            displayName: liveUser?.displayName || user.displayName,
-            handle: liveUser?.handle || user.handle || `@${(user.displayName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}`,
-            avatarUrl: liveUser?.avatarUrl || user.avatarUrl || '',
-            bio: liveUser?.bio || user.bio || '',
-            badge: liveUser?.badge || user.badge || 'verified',
+            id: liveUser.id || user.id || ('usr_' + (user.email ? user.email.split('@')[0] : 'user')),
+            email: liveUser.email || user.email,
+            displayName: liveUser.displayName || user.displayName,
+            handle: liveUser.handle || user.handle || `@${(user.displayName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+            avatarUrl: liveUser.avatarUrl || user.avatarUrl || '',
+            bio: liveUser.bio || user.bio || '',
+            badge: liveUser.badge || user.badge || 'verified',
             role,
             status,
-            createdAt: liveUser?.createdAt || user.createdAt || new Date().toISOString(),
+            createdAt: liveUser.createdAt || user.createdAt || new Date().toISOString(),
           };
 
           localStorage.setItem('portal_active_session', JSON.stringify(updatedUser));
@@ -260,52 +234,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  // Sign In implementation
-  const signIn = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  // Sign In implementation (Server-Side Auth)
+  const signIn = async (emailOrUsername: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const cleanEmail = email.toLowerCase().trim();
-      let serverUser: UserProfile | null = null;
+      const cleanIdentifier = emailOrUsername.toLowerCase().trim();
 
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail, password }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success && data.user) {
-          serverUser = data.user;
-        }
-      } catch (netErr) {
-        console.warn('Backend login fetch failed, falling back to local store:', netErr);
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanIdentifier, username: cleanIdentifier, password }),
+      });
+
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : null;
+      if (!res.ok || !data || !data.success || !data.user) {
+        return { success: false, error: data?.error || 'Invalid credentials or server error.' };
       }
 
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users: any[] = [];
-      try {
-        users = JSON.parse(usersStr);
-      } catch {
-        users = [];
-      }
-
-      const foundLocal = users.find(
-        (u: any) => u.email.toLowerCase() === cleanEmail && u.password === password
-      );
-
-      if (!serverUser && !foundLocal) {
-        return { success: false, error: 'Invalid email or password.' };
-      }
-
-      const activeUser = serverUser || foundLocal;
+      const activeUser: UserProfile = data.user;
       const isAdmin = isDefaultAdminEmail(activeUser.email) || activeUser.role === 'admin';
       const role: UserRole = isAdmin ? 'admin' : (activeUser.role || 'user');
       const status: UserStatus = isAdmin ? 'approved' : (activeUser.status || 'pending');
 
       const profile: UserProfile = {
-        id: activeUser.id || ('usr_' + activeUser.email.split('@')[0]),
+        id: activeUser.id,
         email: activeUser.email,
         displayName: activeUser.displayName,
-        handle: activeUser.handle || (`@${activeUser.displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`),
+        handle: activeUser.handle || `@${(activeUser.displayName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}`,
         avatarUrl: activeUser.avatarUrl || '',
         bio: activeUser.bio || 'Hub User Explorer',
         badge: activeUser.badge || 'verified',
@@ -314,14 +269,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createdAt: activeUser.createdAt || new Date().toISOString(),
       };
 
-      const matchedIdx = users.findIndex((u) => u.email?.toLowerCase() === cleanEmail);
-      if (matchedIdx >= 0) {
-        users[matchedIdx] = { ...users[matchedIdx], ...profile };
-      } else {
-        users.push({ ...profile, password });
-      }
-      localStorage.setItem('portal_registered_users', JSON.stringify(users));
-
+      // Persist active session only
       localStorage.setItem('portal_active_session', JSON.stringify(profile));
       setAuth({
         user: profile,
@@ -337,11 +285,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Login failed.' };
+      console.error('Sign in error:', err);
+      return { success: false, error: err.message || 'Login failed. Please check network connection.' };
     }
   };
 
-  // Sign Up implementation (Defaults new users to status: 'pending', role: 'user')
+  // Sign Up implementation (Server-Side Global Registration)
   const signUp = async (
     email: string,
     password: string,
@@ -355,67 +304,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ? (handle.startsWith('@') ? handle : `@${handle}`)
         : `@${cleanDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`;
 
-      // Call backend API to persist to disk
-      let serverUser: UserProfile | null = null;
-      let serverMsg: string | undefined;
+      // Call backend API to persist globally on disk/database
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          password,
+          displayName: cleanDisplayName,
+          handle: cleanHandle,
+        }),
+      });
 
-      try {
-        const res = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            password,
-            displayName: cleanDisplayName,
-            handle: cleanHandle,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          return { success: false, error: data.error || 'Failed to register.' };
-        }
-        serverUser = data.user;
-        serverMsg = data.message;
-      } catch (netErr) {
-        console.warn('Backend register fetch failed, fallback to local store:', netErr);
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : null;
+      if (!res.ok || !data || !data.success || !data.user) {
+        return { success: false, error: data?.error || 'Failed to register account.' };
       }
 
+      const serverUser: UserProfile = data.user;
       const isMaster = isDefaultAdminEmail(cleanEmail);
-      const role: UserRole = serverUser?.role || (isMaster ? 'admin' : 'user');
-      const status: UserStatus = serverUser?.status || (isMaster ? 'approved' : 'pending');
+      const role: UserRole = serverUser.role || (isMaster ? 'admin' : 'user');
+      const status: UserStatus = serverUser.status || (isMaster ? 'approved' : 'pending');
 
       const newUser: UserProfile = {
-        id: serverUser?.id || ('usr_' + Date.now().toString(36)),
+        id: serverUser.id,
         email: cleanEmail,
         displayName: cleanDisplayName,
         handle: cleanHandle,
-        avatarUrl: serverUser?.avatarUrl || '',
-        bio: serverUser?.bio || 'Explore modules, manage files, stream and communicate with peers.',
+        avatarUrl: serverUser.avatarUrl || '',
+        bio: serverUser.bio || 'Explore modules, manage files, stream and communicate with peers.',
         badge: 'verified',
         role,
         status,
-        createdAt: serverUser?.createdAt || new Date().toISOString(),
+        createdAt: serverUser.createdAt || new Date().toISOString(),
       };
 
-      // Save to local storage
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users: any[] = [];
-      try {
-        users = JSON.parse(usersStr);
-        if (!Array.isArray(users)) users = [];
-      } catch {
-        users = [];
-      }
-
-      const existingIdx = users.findIndex((u) => u.email?.toLowerCase() === cleanEmail);
-      if (existingIdx >= 0) {
-        users[existingIdx] = { ...users[existingIdx], ...newUser, password };
-      } else {
-        users.push({ ...newUser, password });
-      }
-      localStorage.setItem('portal_registered_users', JSON.stringify(users));
-
-      // Auto-login active session
+      // Save only current session
       localStorage.setItem('portal_active_session', JSON.stringify(newUser));
       setAuth({
         user: newUser,
@@ -431,9 +356,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       return {
         success: true,
-        message: serverMsg || 'Account created successfully! Your request is currently waiting for admin approval.',
+        message: data.message || 'Account created successfully! Your request is currently waiting for admin approval.',
       };
     } catch (err: any) {
+      console.error('Registration error:', err);
       return { success: false, error: err.message || 'Registration failed.' };
     }
   };
@@ -453,56 +379,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshUserStatus = async (): Promise<UserStatus | null> => {
     if (!auth.user) return null;
     try {
-      let liveStatus: UserStatus | null = null;
-      let liveRole: UserRole | null = null;
+      const res = await fetch(`/api/auth/user/${encodeURIComponent(auth.user.id || auth.user.email)}`);
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      if (res.ok && isJson) {
+        const data = await res.json();
+        if (data.success && data.user) {
+          const liveStatus: UserStatus = data.user.status || 'pending';
+          const liveRole: UserRole = data.user.role || auth.user.role;
 
-      // Try server API first
-      try {
-        const res = await fetch(`/api/auth/user/${auth.user.id || auth.user.email}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.user) {
-            liveStatus = data.user.status;
-            liveRole = data.user.role;
+          const updated: UserProfile = {
+            ...auth.user,
+            status: liveStatus,
+            role: liveRole,
+          };
+
+          localStorage.setItem('portal_active_session', JSON.stringify(updated));
+          setAuth((prev) => ({
+            ...prev,
+            user: updated,
+          }));
+
+          if (liveStatus === 'approved' && (currentRoute === '/auth/pending' || currentRoute === '/auth/pending-approval')) {
+            navigateTo('/dashboard');
           }
+
+          return liveStatus;
         }
-      } catch (e) {
-        console.warn('Failed to query server user endpoint:', e);
-      }
-
-      // Check local storage if server not available
-      if (!liveStatus) {
-        const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-        const users = JSON.parse(usersStr);
-        const found = users.find(
-          (u: any) =>
-            (auth.user?.id && u.id === auth.user.id) ||
-            (auth.user?.email && u.email.toLowerCase() === auth.user.email.toLowerCase())
-        );
-        if (found) {
-          liveStatus = found.status || 'pending';
-          liveRole = found.role || 'user';
-        }
-      }
-
-      if (liveStatus) {
-        const updated: UserProfile = {
-          ...auth.user,
-          status: liveStatus,
-          role: liveRole || auth.user.role,
-        };
-
-        localStorage.setItem('portal_active_session', JSON.stringify(updated));
-        setAuth((prev) => ({
-          ...prev,
-          user: updated,
-        }));
-
-        if (liveStatus === 'approved' && (currentRoute === '/auth/pending' || currentRoute === '/auth/pending-approval')) {
-          navigateTo('/dashboard');
-        }
-
-        return liveStatus;
       }
     } catch (e) {
       console.error('Failed to refresh user status:', e);
@@ -510,40 +412,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return null;
   };
 
-  // Admin user queries & actions (syncs with server)
-  const getAllRegisteredUsers = (): UserProfile[] => {
-    try {
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users = JSON.parse(usersStr);
-      if (!Array.isArray(users)) users = [];
-
-      // If empty, return master admin
-      if (users.length === 0) {
-        users = [MASTER_ADMIN_SEED];
-        localStorage.setItem('portal_registered_users', JSON.stringify(users));
-      }
-
-      return users.map((u: any) => ({
-        id: u.id || ('usr_' + (u.email ? u.email.split('@')[0] : 'user')),
-        email: u.email,
-        displayName: u.displayName || 'Unknown User',
-        handle: u.handle || (`@${(u.displayName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}`),
-        avatarUrl: u.avatarUrl || '',
-        bio: u.bio || '',
-        badge: u.badge || 'verified',
-        role: (u.role || (isDefaultAdminEmail(u.email) ? 'admin' : 'user')) as UserRole,
-        status: (u.status || (isDefaultAdminEmail(u.email) ? 'approved' : 'pending')) as UserStatus,
-        createdAt: u.createdAt || new Date().toISOString(),
-      }));
-    } catch {
-      return [];
-    }
-  };
-
+  // Admin user queries & actions (100% Server-backed)
   const fetchAdminUsers = async (): Promise<UserProfile[]> => {
     try {
       const res = await fetch('/api/admin/users');
-      if (res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      if (res.ok && isJson) {
         const data = await res.json();
         if (data.success && Array.isArray(data.users)) {
           const mappedUsers: UserProfile[] = data.users.map((u: any) => ({
@@ -558,84 +432,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
             status: u.status,
             createdAt: u.createdAt || new Date().toISOString(),
           }));
-
-          // Sync with local storage
-          localStorage.setItem('portal_registered_users', JSON.stringify(mappedUsers));
           return mappedUsers;
         }
       }
     } catch (err) {
       console.warn('Failed to fetch admin users from server:', err);
     }
-    return getAllRegisteredUsers();
+    return [];
+  };
+
+  const getAllRegisteredUsers = (): UserProfile[] => {
+    return [];
   };
 
   const updateUserStatus = async (userId: string, newStatus: UserStatus, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      // Send to server
-      try {
-        await fetch('/api/admin/users/update-status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId, email: userEmail, status: newStatus }),
-        });
-      } catch (netErr) {
-        console.warn('Server status update warning:', netErr);
-      }
-
-      // Update local storage
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users: any[] = [];
-      try {
-        users = JSON.parse(usersStr);
-      } catch {
-        users = [];
-      }
-
-      const targetId = (userId || '').toLowerCase().trim();
-      const targetEmail = (userEmail || '').toLowerCase().trim();
-
-      let matched = false;
-      const updatedUsers = users.map((u: any) => {
-        const uId = (u.id || '').toLowerCase().trim();
-        const uEmail = (u.email || '').toLowerCase().trim();
-
-        const isMatch =
-          (targetId && uId === targetId) ||
-          (targetEmail && uEmail === targetEmail) ||
-          (targetId && uEmail && targetId.includes(uEmail)) ||
-          (uId && targetEmail && uId.includes(targetEmail.split('@')[0]));
-
-        if (isMatch) {
-          matched = true;
-          return {
-            ...u,
-            id: u.id || userId,
-            status: newStatus,
-          };
-        }
-        return u;
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email: userEmail, status: newStatus }),
       });
 
-      if (!matched && userEmail) {
-        updatedUsers.push({
-          id: userId,
-          email: userEmail.toLowerCase().trim(),
-          displayName: userEmail.split('@')[0],
-          handle: `@${userEmail.split('@')[0]}`,
-          status: newStatus,
-          role: isDefaultAdminEmail(userEmail) ? 'admin' : 'user',
-          createdAt: new Date().toISOString()
-        });
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : null;
+      if (!res.ok || !data || !data.success) {
+        return { success: false, error: data?.error || 'Failed to update user status on server.' };
       }
-
-      localStorage.setItem('portal_registered_users', JSON.stringify(updatedUsers));
 
       // Sync active session if the current user was updated
       if (
         auth.user &&
         (auth.user.id === userId ||
-          (auth.user.email && targetEmail && auth.user.email.toLowerCase() === targetEmail))
+          (auth.user.email && userEmail && auth.user.email.toLowerCase() === userEmail.toLowerCase()))
       ) {
         const updatedProfile: UserProfile = { ...auth.user, status: newStatus };
         localStorage.setItem('portal_active_session', JSON.stringify(updatedProfile));
@@ -651,49 +479,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const updateUserRole = async (userId: string, newRole: UserRole, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      // Send to server
-      try {
-        await fetch(`/api/admin/users/${userId}/role`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: newRole }),
-        });
-      } catch (netErr) {
-        console.warn('Server role update warning:', netErr);
-      }
-
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users: any[] = [];
-      try {
-        users = JSON.parse(usersStr);
-      } catch {
-        users = [];
-      }
-
-      const targetId = (userId || '').toLowerCase().trim();
-      const targetEmail = (userEmail || '').toLowerCase().trim();
-
-      const updatedUsers = users.map((u: any) => {
-        const uId = (u.id || '').toLowerCase().trim();
-        const uEmail = (u.email || '').toLowerCase().trim();
-
-        const isMatch =
-          (targetId && uId === targetId) ||
-          (targetEmail && uEmail === targetEmail);
-
-        if (isMatch) {
-          return { ...u, role: newRole };
-        }
-        return u;
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: newRole }),
       });
 
-      localStorage.setItem('portal_registered_users', JSON.stringify(updatedUsers));
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : null;
+      if (!res.ok || !data || !data.success) {
+        return { success: false, error: data?.error || 'Failed to update user role on server.' };
+      }
 
       // Sync active session if the current user was updated
       if (
         auth.user &&
         (auth.user.id === userId ||
-          (auth.user.email && targetEmail && auth.user.email.toLowerCase() === targetEmail))
+          (auth.user.email && userEmail && auth.user.email.toLowerCase() === userEmail.toLowerCase()))
       ) {
         const updatedProfile: UserProfile = { ...auth.user, role: newRole };
         localStorage.setItem('portal_active_session', JSON.stringify(updatedProfile));
@@ -702,45 +504,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || 'Failed to update role' };
     }
   };
 
   const deleteUser = async (userId: string, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      // Send to server
-      try {
-        await fetch(`/api/admin/users/${userId}`, {
-          method: 'DELETE',
-        });
-      } catch (netErr) {
-        console.warn('Server delete user warning:', netErr);
-      }
-
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      let users: any[] = [];
-      try {
-        users = JSON.parse(usersStr);
-      } catch {
-        users = [];
-      }
-
-      const targetId = (userId || '').toLowerCase().trim();
-      const targetEmail = (userEmail || '').toLowerCase().trim();
-
-      const updatedUsers = users.filter((u: any) => {
-        const uId = (u.id || '').toLowerCase().trim();
-        const uEmail = (u.email || '').toLowerCase().trim();
-        const isMatch =
-          (targetId && uId === targetId) ||
-          (targetEmail && uEmail === targetEmail);
-        return !isMatch;
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
       });
 
-      localStorage.setItem('portal_registered_users', JSON.stringify(updatedUsers));
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : null;
+      if (!res.ok || !data || !data.success) {
+        return { success: false, error: data?.error || 'Failed to delete user on server.' };
+      }
+
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || 'Failed to delete user' };
     }
   };
 
@@ -770,24 +552,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Save in session
     localStorage.setItem('portal_active_session', JSON.stringify(updatedUser));
 
-    // Update inside registered users list too
-    const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-    const users = JSON.parse(usersStr);
-    const updatedUsers = users.map((u: any) => {
-      if (u.email.toLowerCase() === auth.user!.email.toLowerCase()) {
-        return { 
-          ...u, 
-          displayName, 
-          handle: formattedHandle, 
-          avatarUrl, 
-          bio, 
-          badge: updatedUser.badge 
-        };
-      }
-      return u;
-    });
-    localStorage.setItem('portal_registered_users', JSON.stringify(updatedUsers));
-
     // Update current State
     setAuth((prev) => ({
       ...prev,
@@ -811,6 +575,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         toggleTheme,
         refreshUserStatus,
         getAllRegisteredUsers,
+        fetchAdminUsers,
         updateUserStatus,
         updateUserRole,
         deleteUser,

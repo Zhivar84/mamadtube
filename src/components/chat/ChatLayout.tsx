@@ -10,7 +10,6 @@ import NewChatModal from './NewChatModal';
 import ChatLiveCallOverlay from './ChatLiveCallOverlay';
 import IncomingCallModal from './IncomingCallModal';
 import { Conversation, ChatMessage, MessageAttachment, ChatUser, CallSignal } from '../../types/chat';
-import { INITIAL_CONVERSATIONS, INITIAL_MESSAGES } from '../../data/chatSeedData';
 import { useApp } from '../../context/AppContext';
 import { 
   getDirectConversationId, 
@@ -20,8 +19,6 @@ import {
 import { ringtoneService } from '../../utils/callRingtone';
 import { MessageSquare, Plus, Send, ShieldCheck, PhoneCall } from 'lucide-react';
 
-const STORAGE_CONVERSATIONS_KEY = 'mamadtube_conversations_v3';
-const STORAGE_MESSAGES_KEY = 'mamadtube_chat_messages_v3';
 const STORAGE_CALL_SIGNAL_KEY = 'mamadtube_active_call_signal';
 
 export default function ChatLayout() {
@@ -43,27 +40,12 @@ export default function ChatLayout() {
   // Admin global moderation mode toggle (defaults to false so admin sees their own chats, but can toggle to inspect all)
   const [isAdminModeratorMode, setIsAdminModeratorMode] = useState(false);
 
-  // All stored conversations across system
-  const [allConversations, setAllConversations] = useState<Conversation[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_CONVERSATIONS_KEY);
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
+  // All stored conversations across system from server
+  const [allConversations, setAllConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>('');
 
-  // All stored messages indexed by conversation ID
-  const [allMessages, setAllMessages] = useState<Record<string, ChatMessage[]>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_MESSAGES_KEY);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+  // All stored messages indexed by conversation ID from server
+  const [allMessages, setAllMessages] = useState<Record<string, ChatMessage[]>>({});
 
   // Calling States
   const [activeCallSession, setActiveCallSession] = useState<CallSignal | null>(null);
@@ -73,29 +55,62 @@ export default function ChatLayout() {
   const [typingUserName, setTypingUserName] = useState('');
   const [showNewChatModal, setShowNewChatModal] = useState(false);
 
-  // Sync conversations to localStorage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_CONVERSATIONS_KEY, JSON.stringify(allConversations));
-  }, [allConversations]);
+  // Load conversations from server
+  const loadConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/chat/conversations?userId=${encodeURIComponent(currentUser.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.conversations)) {
+          setAllConversations(data.conversations);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching conversations:', err);
+    }
+  }, [currentUser.id]);
 
-  // Sync messages to localStorage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_MESSAGES_KEY, JSON.stringify(allMessages));
-  }, [allMessages]);
+  // Load messages for the active conversation
+  const loadActiveMessages = useCallback(async (convId: string) => {
+    if (!convId) return;
+    try {
+      const res = await fetch(`/api/chat/messages?conversationId=${encodeURIComponent(convId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.messages)) {
+          setAllMessages(prev => ({
+            ...prev,
+            [convId]: data.messages,
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching messages:', err);
+    }
+  }, []);
 
-  // Listen to cross-tab storage and call signals
+  // Polling for new chats/messages
+  useEffect(() => {
+    loadConversations();
+    const interval = setInterval(() => {
+      loadConversations();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [loadConversations]);
+
+  useEffect(() => {
+    if (activeConversationId) {
+      loadActiveMessages(activeConversationId);
+      const interval = setInterval(() => {
+        loadActiveMessages(activeConversationId);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [activeConversationId, loadActiveMessages]);
+
+  // Listen to cross-tab storage for call signals
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === STORAGE_CONVERSATIONS_KEY && e.newValue) {
-        try {
-          setAllConversations(JSON.parse(e.newValue));
-        } catch {}
-      }
-      if (e.key === STORAGE_MESSAGES_KEY && e.newValue) {
-        try {
-          setAllMessages(JSON.parse(e.newValue));
-        } catch {}
-      }
       if (e.key === STORAGE_CALL_SIGNAL_KEY && e.newValue) {
         try {
           const signal: CallSignal = JSON.parse(e.newValue);
@@ -148,11 +163,10 @@ export default function ChatLayout() {
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
-    // Mark conversation as read
     setAllConversations(prev => prev.map(c => c.id === id ? { ...c, unreadCount: 0 } : c));
   };
 
-  const handleSendMessage = (
+  const handleSendMessage = async (
     text: string,
     attachments?: MessageAttachment[],
     voiceNote?: { audioUrl: string; duration: number; waveform?: number[] },
@@ -189,13 +203,12 @@ export default function ChatLayout() {
       reactions: []
     };
 
-    // Append to messages
+    // Optimistic local update
     setAllMessages(prev => ({
       ...prev,
       [activeConversationId]: [...(prev[activeConversationId] || []), newMsg]
     }));
 
-    // Update conversation lastMessage
     setAllConversations(prev => prev.map(c => {
       if (c.id === activeConversationId) {
         return {
@@ -213,35 +226,76 @@ export default function ChatLayout() {
       }
       return c;
     }));
+
+    try {
+      await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMsg),
+      });
+    } catch (err) {
+      console.error('Error sending message:', err);
+    }
   };
 
-  const handleEditMessage = (messageId: string, newText: string) => {
+  const handleEditMessage = async (messageId: string, newText: string) => {
     setAllMessages(prev => ({
       ...prev,
       [activeConversationId]: (prev[activeConversationId] || []).map(m =>
         m.id === messageId ? { ...m, content: newText, isEdited: true } : m
       )
     }));
+
+    try {
+      await fetch(`/api/chat/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: newText }),
+      });
+    } catch (err) {
+      console.error('Error updating message:', err);
+    }
   };
 
   // Master delete function (supports both author and Admin override)
-  const handleDeleteMessage = (messageId: string) => {
+  const handleDeleteMessage = async (messageId: string) => {
     setAllMessages(prev => ({
       ...prev,
       [activeConversationId]: (prev[activeConversationId] || []).filter(m => m.id !== messageId)
     }));
+
+    try {
+      await fetch(`/api/chat/messages/${messageId}`, {
+        method: 'DELETE',
+      });
+    } catch (err) {
+      console.error('Error deleting message:', err);
+    }
   };
 
-  const handleTogglePinMessage = (messageId: string) => {
+  const handleTogglePinMessage = async (messageId: string) => {
+    const target = (allMessages[activeConversationId] || []).find(m => m.id === messageId);
+    const newPinState = !target?.isPinned;
+
     setAllMessages(prev => ({
       ...prev,
       [activeConversationId]: (prev[activeConversationId] || []).map(m =>
-        m.id === messageId ? { ...m, isPinned: !m.isPinned } : m
+        m.id === messageId ? { ...m, isPinned: newPinState } : m
       )
     }));
+
+    try {
+      await fetch(`/api/chat/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPinned: newPinState }),
+      });
+    } catch (err) {
+      console.error('Error pinning message:', err);
+    }
   };
 
-  const handleAddReaction = (messageId: string, emoji: string) => {
+  const handleAddReaction = async (messageId: string, emoji: string) => {
     setAllMessages(prev => ({
       ...prev,
       [activeConversationId]: (prev[activeConversationId] || []).map(m => {
@@ -284,10 +338,19 @@ export default function ChatLayout() {
         }
       })
     }));
+
+    try {
+      await fetch(`/api/chat/messages/${messageId}/reactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emoji, userId: currentUser.id }),
+      });
+    } catch (err) {
+      console.error('Error adding reaction:', err);
+    }
   };
 
-  const handleCreateConversation = (newConv: Conversation) => {
-    // Check if direct conversation already exists
+  const handleCreateConversation = async (newConv: Conversation) => {
     const existing = allConversations.find(c => c.id === newConv.id);
     if (existing) {
       setActiveConversationId(existing.id);
@@ -300,10 +363,20 @@ export default function ChatLayout() {
       [newConv.id]: []
     }));
     setActiveConversationId(newConv.id);
+
+    try {
+      await fetch('/api/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConv),
+      });
+    } catch (err) {
+      console.error('Error creating conversation:', err);
+    }
   };
 
   // Direct DM starter from search results
-  const handleStartDirectChatWithUser = (targetUser: ChatUser) => {
+  const handleStartDirectChatWithUser = async (targetUser: ChatUser) => {
     const directConvId = getDirectConversationId(currentUser.id, targetUser.id);
     const existing = allConversations.find(c => c.id === directConvId);
     
@@ -322,6 +395,16 @@ export default function ChatLayout() {
       setAllConversations(prev => [newConv, ...prev]);
       setAllMessages(prev => ({ ...prev, [directConvId]: [] }));
       setActiveConversationId(directConvId);
+
+      try {
+        await fetch('/api/chat/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newConv),
+        });
+      } catch (err) {
+        console.error('Error creating direct chat:', err);
+      }
     }
   };
 

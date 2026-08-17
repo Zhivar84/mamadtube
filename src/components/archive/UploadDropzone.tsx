@@ -47,82 +47,51 @@ export default function UploadDropzone({
     });
   };
 
-  const simulateAndStoreUpload = (item: UploadQueueItem) => {
+  const simulateAndStoreUpload = async (item: UploadQueueItem) => {
     const file = item.file;
-    const { category, extension } = detectFileCategory(file);
-    let currentProgress = 0;
+    const formData = new FormData();
+    formData.append('files', file);
+    if (currentFolderId) {
+      formData.append('folderId', currentFolderId);
+    }
 
-    const interval = setInterval(() => {
-      currentProgress += Math.floor(Math.random() * 25) + 15;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/archive/upload', true);
 
-      if (currentProgress >= 100) {
-        currentProgress = 100;
-        clearInterval(interval);
-
-        // Read file data
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const dataUrl = e.target?.result as string;
-
-          const createdFile: ArchiveFile = {
-            id: `file-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            name: file.name,
-            size: file.size,
-            formattedSize: formatBytes(file.size),
-            category,
-            mimeType: file.type || 'application/octet-stream',
-            extension: extension || 'bin',
-            folderId: currentFolderId,
-            createdAt: new Date().toLocaleDateString('en-US', {
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-            updatedAt: 'Just now',
-            url: dataUrl,
-            previewUrl: category === 'image' ? dataUrl : undefined,
-            tags: [category.toUpperCase()],
-          };
-
-          // If it's a text/json file, read content
-          if (
-            file.type.includes('text') ||
-            file.type.includes('json') ||
-            ['md', 'txt', 'json', 'ts', 'js', 'html', 'css'].includes(extension)
-          ) {
-            const textReader = new FileReader();
-            textReader.onload = (textEv) => {
-              createdFile.content = (textEv.target?.result as string)?.slice(0, 10000);
-              onUploadComplete([createdFile]);
-            };
-            textReader.readAsText(file);
-          } else {
-            onUploadComplete([createdFile]);
-          }
-
-          setUploadQueue((prev) =>
-            prev.map((q) => (q.id === item.id ? { ...q, progress: 100, status: 'completed' } : q))
-          );
-        };
-
-        reader.onerror = () => {
-          setUploadQueue((prev) =>
-            prev.map((q) =>
-              q.id === item.id ? { ...q, status: 'error', error: 'Failed to read file contents' } : q
-            )
-          );
-        };
-
-        // For audio, video, images, read as DataURL
-        reader.readAsDataURL(file);
-      } else {
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 90);
         setUploadQueue((prev) =>
-          prev.map((q) => (q.id === item.id ? { ...q, progress: currentProgress } : q))
+          prev.map((q) => (q.id === item.id ? { ...q, progress: percent } : q))
         );
       }
-    }, 120);
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = JSON.parse(xhr.responseText);
+          if (response.success && Array.isArray(response.files)) {
+            setUploadQueue((prev) =>
+              prev.map((q) => (q.id === item.id ? { ...q, progress: 100, status: 'completed' } : q))
+            );
+            onUploadComplete(response.files);
+            return;
+          }
+        } catch {}
+      }
+      setUploadQueue((prev) =>
+        prev.map((q) => (q.id === item.id ? { ...q, status: 'error', error: 'Upload failed' } : q))
+      );
+    };
+
+    xhr.onerror = () => {
+      setUploadQueue((prev) =>
+        prev.map((q) => (q.id === item.id ? { ...q, status: 'error', error: 'Network error' } : q))
+      );
+    };
+
+    xhr.send(formData);
   };
 
   const handleDragOver = (e: React.DragEvent) => {

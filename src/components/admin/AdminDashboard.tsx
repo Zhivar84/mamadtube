@@ -234,7 +234,7 @@ export default function AdminDashboard() {
     ));
 
     try {
-      const res = updateUserStatus(user.id, 'approved', user.email);
+      const res = await updateUserStatus(user.id, 'approved', user.email);
       if (res.success) {
         showToast(`User ${user.displayName} is now approved!`, 'success');
       } else {
@@ -265,7 +265,7 @@ export default function AdminDashboard() {
     ));
 
     try {
-      const res = updateUserStatus(user.id, 'rejected', user.email);
+      const res = await updateUserStatus(user.id, 'rejected', user.email);
       if (res.success) {
         showToast(`User ${user.displayName} has been rejected.`, 'info');
       } else {
@@ -298,7 +298,7 @@ export default function AdminDashboard() {
       ));
 
       try {
-        const res = updateUserStatus(user.id, targetStatus, user.email);
+        const res = await updateUserStatus(user.id, targetStatus, user.email);
         if (res.success) {
           showToast(`User ${user.displayName} unbanned & restored.`, 'success');
         } else {
@@ -330,7 +330,7 @@ export default function AdminDashboard() {
         ));
 
         try {
-          const res = updateUserStatus(user.id, 'banned', user.email);
+          const res = await updateUserStatus(user.id, 'banned', user.email);
           if (res.success) {
             showToast(`User ${user.displayName} has been banned.`, 'info');
           } else {
@@ -376,7 +376,7 @@ export default function AdminDashboard() {
         ));
 
         try {
-          const res = updateUserRole(user.id, newRole, user.email);
+          const res = await updateUserRole(user.id, newRole, user.email);
           if (res.success) {
             showToast(`Updated ${user.displayName}'s role to ${newRole}.`, 'success');
           } else {
@@ -407,7 +407,7 @@ export default function AdminDashboard() {
     ));
 
     try {
-      const res = updateUserStatus(user.id, newStatus, user.email);
+      const res = await updateUserStatus(user.id, newStatus, user.email);
       if (res.success) {
         showToast(`Status updated to ${newStatus} for ${user.displayName}`, 'success');
       } else {
@@ -445,7 +445,7 @@ export default function AdminDashboard() {
         ));
 
         try {
-          const res = deleteUser(user.id, user.email);
+          const res = await deleteUser(user.id, user.email);
           if (res.success) {
             showToast(`User ${user.displayName} deleted successfully.`, 'success');
           } else {
