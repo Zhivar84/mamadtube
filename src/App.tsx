@@ -53,6 +53,7 @@ function AppContent() {
         return <ChatLayout />;
       case '/admin':
         return auth.user?.role === 'admin' ? <AdminDashboard /> : <Dashboard />;
+      case '/auth/pending':
       case '/auth/pending-approval':
         return <PendingApprovalPage />;
       default:

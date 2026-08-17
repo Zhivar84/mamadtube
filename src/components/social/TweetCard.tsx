@@ -247,44 +247,101 @@ export default function TweetCard({
                 <p className="text-xs font-semibold text-zinc-300 mb-1">{post.poll.question}</p>
               )}
               <div className="space-y-1.5">
-                {post.poll.options.map((opt) => {
-                  const total = post.poll!.totalVotes || 0;
-                  const pct = total > 0 ? Math.round((opt.votes / total) * 100) : 0;
-                  const isVoted = post.poll!.userVotedOptionId === opt.id;
+                {(() => {
+                  const totalVotes = Array.isArray(post.poll.options)
+                    ? post.poll.options.reduce(
+                        (sum, opt) =>
+                          sum +
+                          (Array.isArray(opt.votes)
+                            ? opt.votes.length
+                            : typeof (opt as any).votes === 'number'
+                            ? (opt as any).votes
+                            : 0),
+                        0
+                      )
+                    : post.poll.totalVotes || 0;
 
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={(e) => handleVote(e, opt.id)}
-                      className={`w-full relative overflow-hidden text-left p-2.5 rounded-lg border transition-all cursor-pointer ${
-                        isVoted
-                          ? 'border-sky-500 bg-sky-950/20'
-                          : 'border-zinc-800 hover:border-zinc-700 bg-zinc-900/50'
-                      }`}
-                    >
-                      {/* Percentage background fill */}
-                      <div
-                        style={{ width: `${pct}%` }}
-                        className={`absolute inset-y-0 left-0 ${
-                          isVoted ? 'bg-sky-500/25' : 'bg-zinc-800/60'
-                        } transition-all duration-500`}
-                      />
+                  const hasUserVotedOnPoll =
+                    Array.isArray(post.poll.options) &&
+                    post.poll.options.some(
+                      (opt) =>
+                        Array.isArray(opt.votes) &&
+                        (opt.votes.includes(currentUser.id) || opt.votes.includes(currentUser.handle))
+                    );
 
-                      <div className="relative z-10 flex items-center justify-between text-xs font-medium">
-                        <span className={`flex items-center gap-1.5 ${isVoted ? 'text-sky-300 font-bold' : 'text-zinc-200'}`}>
-                          {opt.text}
-                          {isVoted && <Check className="w-3.5 h-3.5 text-sky-400" />}
-                        </span>
-                        <span className="font-mono text-zinc-400 font-semibold">{pct}%</span>
-                      </div>
-                    </button>
-                  );
-                })}
+                  return post.poll.options.map((opt) => {
+                    const optVoteCount = Array.isArray(opt.votes)
+                      ? opt.votes.length
+                      : typeof (opt as any).votes === 'number'
+                      ? (opt as any).votes
+                      : 0;
+                    const pct = totalVotes > 0 ? Math.round((optVoteCount / totalVotes) * 100) : 0;
+                    const isVoted =
+                      Array.isArray(opt.votes) &&
+                      (opt.votes.includes(currentUser.id) || opt.votes.includes(currentUser.handle));
+
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={(e) => handleVote(e, opt.id)}
+                        disabled={hasUserVotedOnPoll}
+                        className={`w-full relative overflow-hidden text-left p-2.5 rounded-lg border transition-all ${
+                          hasUserVotedOnPoll ? 'cursor-default' : 'cursor-pointer hover:border-sky-500/60'
+                        } ${
+                          isVoted
+                            ? 'border-sky-500 bg-sky-950/30'
+                            : hasUserVotedOnPoll
+                            ? 'border-zinc-800/80 bg-zinc-900/40'
+                            : 'border-zinc-800 hover:border-zinc-700 bg-zinc-900/50'
+                        }`}
+                      >
+                        {/* Percentage background fill if user voted */}
+                        {hasUserVotedOnPoll && (
+                          <div
+                            style={{ width: `${pct}%` }}
+                            className={`absolute inset-y-0 left-0 ${
+                              isVoted ? 'bg-sky-500/25' : 'bg-zinc-800/60'
+                            } transition-all duration-500`}
+                          />
+                        )}
+
+                        <div className="relative z-10 flex items-center justify-between text-xs font-medium">
+                          <span className={`flex items-center gap-1.5 ${isVoted ? 'text-sky-300 font-bold' : 'text-zinc-200'}`}>
+                            {opt.text}
+                            {isVoted && <Check className="w-3.5 h-3.5 text-sky-400" />}
+                          </span>
+                          {hasUserVotedOnPoll ? (
+                            <span className="font-mono text-zinc-400 font-semibold">{pct}%</span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-500 font-normal">Vote</span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  });
+                })()}
               </div>
 
               <div className="flex items-center justify-between text-[11px] text-zinc-500 pt-1">
-                <span>{post.poll.totalVotes.toLocaleString()} votes</span>
-                <span>{post.poll.expiresAt}</span>
+                <span>
+                  {(
+                    Array.isArray(post.poll.options)
+                      ? post.poll.options.reduce(
+                          (sum, opt) =>
+                            sum +
+                            (Array.isArray(opt.votes)
+                              ? opt.votes.length
+                              : typeof (opt as any).votes === 'number'
+                              ? (opt as any).votes
+                              : 0),
+                          0
+                        )
+                      : post.poll.totalVotes || 0
+                  ).toLocaleString()}{' '}
+                  votes
+                </span>
+                <span>{post.poll.expiresAt || '1 day left'}</span>
               </div>
             </div>
           )}

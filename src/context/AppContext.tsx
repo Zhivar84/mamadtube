@@ -41,7 +41,7 @@ interface AppContextType {
   navigateTo: (route: AppRoute) => void;
   auth: AuthState;
   signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signUp: (email: string, password: string, displayName: string, handle?: string) => Promise<{ success: boolean; error?: string }>;
+  signUp: (email: string, password: string, displayName: string, handle?: string) => Promise<{ success: boolean; error?: string; message?: string }>;
   logout: () => void;
   updateProfile: (displayName: string, handle: string, avatarUrl: string, bio?: string, badge?: 'verified' | 'creator' | 'pro') => { success: boolean };
   theme: Theme;
@@ -49,9 +49,10 @@ interface AppContextType {
   // User Management & Admin Actions
   refreshUserStatus: () => Promise<UserStatus | null>;
   getAllRegisteredUsers: () => UserProfile[];
-  updateUserStatus: (userId: string, newStatus: UserStatus, userEmail?: string) => { success: boolean; error?: string };
-  updateUserRole: (userId: string, newRole: UserRole, userEmail?: string) => { success: boolean; error?: string };
-  deleteUser: (userId: string, userEmail?: string) => { success: boolean; error?: string };
+  fetchAdminUsers: () => Promise<UserProfile[]>;
+  updateUserStatus: (userId: string, newStatus: UserStatus, userEmail?: string) => Promise<{ success: boolean; error?: string }>;
+  updateUserRole: (userId: string, newRole: UserRole, userEmail?: string) => Promise<{ success: boolean; error?: string }>;
+  deleteUser: (userId: string, userEmail?: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -83,6 +84,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         '/social',
         '/chat',
         '/admin',
+        '/auth/pending',
         '/auth/pending-approval'
       ];
       if (validRoutes.includes(path)) return path;
@@ -105,7 +107,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Initial authentication restore and sync path
   useEffect(() => {
-    const initializeAuth = () => {
+    const initializeAuth = async () => {
       // Initialize registered users in local storage if not present
       const existingUsersStr = localStorage.getItem('portal_registered_users');
       let registeredUsers: any[] = [];
@@ -134,8 +136,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (activeSession) {
         try {
           const user = JSON.parse(activeSession) as UserProfile;
-          // Match with live registered users data for newest role & status
-          const liveUser = registeredUsers.find(
+
+          // Try to get fresh status from server
+          let serverUser: UserProfile | null = null;
+          try {
+            const res = await fetch(`/api/auth/user/${user.id || user.email}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.success && data.user) {
+                serverUser = data.user;
+              }
+            }
+          } catch (netErr) {
+            // Ignore server offline error during init
+          }
+
+          // Match with server or live registered users data for newest role & status
+          const liveUser = serverUser || registeredUsers.find(
             (u) => (user.id && u.id === user.id) || (user.email && u.email?.toLowerCase() === user.email.toLowerCase())
           );
 
@@ -143,7 +160,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const status: UserStatus = liveUser?.status || (role === 'admin' ? 'approved' : (user.status || 'approved'));
 
           const updatedUser: UserProfile = {
-            id: user.id || liveUser?.id || ('usr_' + (user.email ? user.email.split('@')[0] : 'user')),
+            id: liveUser?.id || user.id || ('usr_' + (user.email ? user.email.split('@')[0] : 'user')),
             email: user.email,
             displayName: liveUser?.displayName || user.displayName,
             handle: liveUser?.handle || user.handle || `@${(user.displayName || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}`,
@@ -189,6 +206,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         '/social',
         '/chat',
         '/admin',
+        '/auth/pending',
         '/auth/pending-approval'
       ];
       if (validRoutes.includes(path)) {
@@ -225,11 +243,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const isAdmin = auth.user.role === 'admin';
 
       if (!isApproved) {
-        if (currentRoute !== '/auth/pending-approval') {
-          navigateTo('/auth/pending-approval');
+        if (currentRoute !== '/auth/pending' && currentRoute !== '/auth/pending-approval') {
+          navigateTo('/auth/pending');
         }
       } else {
-        if (currentRoute === '/auth' || currentRoute === '/auth/pending-approval') {
+        if (currentRoute === '/auth' || currentRoute === '/auth/pending' || currentRoute === '/auth/pending-approval') {
           navigateTo('/dashboard');
         } else if (currentRoute === '/admin' && !isAdmin) {
           navigateTo('/dashboard');
@@ -244,57 +262,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Sign In implementation
   const signIn = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-        let users: any[] = [];
-        try {
-          users = JSON.parse(usersStr);
-        } catch {
-          users = [];
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      let serverUser: UserProfile | null = null;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail, password }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.user) {
+          serverUser = data.user;
         }
+      } catch (netErr) {
+        console.warn('Backend login fetch failed, falling back to local store:', netErr);
+      }
 
-        const foundUser = users.find(
-          (u: any) => u.email.toLowerCase() === email.toLowerCase().trim() && u.password === password
-        );
+      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
+      let users: any[] = [];
+      try {
+        users = JSON.parse(usersStr);
+      } catch {
+        users = [];
+      }
 
-        if (foundUser) {
-          const isAdmin = isDefaultAdminEmail(foundUser.email) || foundUser.role === 'admin';
-          const role: UserRole = isAdmin ? 'admin' : (foundUser.role || 'user');
-          const status: UserStatus = isAdmin ? 'approved' : (foundUser.status || 'pending');
+      const foundLocal = users.find(
+        (u: any) => u.email.toLowerCase() === cleanEmail && u.password === password
+      );
 
-          const profile: UserProfile = {
-            id: foundUser.id || ('usr_' + foundUser.email.split('@')[0]),
-            email: foundUser.email,
-            displayName: foundUser.displayName,
-            handle: foundUser.handle || (`@${foundUser.displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`),
-            avatarUrl: foundUser.avatarUrl || '',
-            bio: foundUser.bio || 'Hub User Explorer',
-            badge: foundUser.badge || 'verified',
-            role,
-            status,
-            createdAt: foundUser.createdAt || new Date().toISOString(),
-          };
+      if (!serverUser && !foundLocal) {
+        return { success: false, error: 'Invalid email or password.' };
+      }
 
-          localStorage.setItem('portal_active_session', JSON.stringify(profile));
-          setAuth({
-            user: profile,
-            isAuthenticated: true,
-            isLoading: false,
-          });
+      const activeUser = serverUser || foundLocal;
+      const isAdmin = isDefaultAdminEmail(activeUser.email) || activeUser.role === 'admin';
+      const role: UserRole = isAdmin ? 'admin' : (activeUser.role || 'user');
+      const status: UserStatus = isAdmin ? 'approved' : (activeUser.status || 'pending');
 
-          if (profile.status === 'pending' || profile.status === 'rejected' || profile.status === 'banned') {
-            navigateTo('/auth/pending-approval');
-          } else {
-            navigateTo('/dashboard');
-          }
+      const profile: UserProfile = {
+        id: activeUser.id || ('usr_' + activeUser.email.split('@')[0]),
+        email: activeUser.email,
+        displayName: activeUser.displayName,
+        handle: activeUser.handle || (`@${activeUser.displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`),
+        avatarUrl: activeUser.avatarUrl || '',
+        bio: activeUser.bio || 'Hub User Explorer',
+        badge: activeUser.badge || 'verified',
+        role,
+        status,
+        createdAt: activeUser.createdAt || new Date().toISOString(),
+      };
 
-          resolve({ success: true });
-        } else {
-          resolve({ success: false, error: 'Invalid email or password.' });
-        }
-      }, 500);
-    });
+      const matchedIdx = users.findIndex((u) => u.email?.toLowerCase() === cleanEmail);
+      if (matchedIdx >= 0) {
+        users[matchedIdx] = { ...users[matchedIdx], ...profile };
+      } else {
+        users.push({ ...profile, password });
+      }
+      localStorage.setItem('portal_registered_users', JSON.stringify(users));
+
+      localStorage.setItem('portal_active_session', JSON.stringify(profile));
+      setAuth({
+        user: profile,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+
+      if (profile.status === 'pending' || profile.status === 'rejected' || profile.status === 'banned') {
+        navigateTo('/auth/pending');
+      } else {
+        navigateTo('/dashboard');
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Login failed.' };
+    }
   };
 
   // Sign Up implementation (Defaults new users to status: 'pending', role: 'user')
@@ -303,79 +347,95 @@ export function AppProvider({ children }: { children: ReactNode }) {
     password: string,
     displayName: string,
     handle?: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-        let users: any[] = [];
-        try {
-          users = JSON.parse(usersStr);
-        } catch {
-          users = [];
-        }
+  ): Promise<{ success: boolean; error?: string; message?: string }> => {
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      const cleanDisplayName = displayName.trim();
+      const cleanHandle = handle 
+        ? (handle.startsWith('@') ? handle : `@${handle}`)
+        : `@${cleanDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`;
 
-        const alreadyExists = users.some((u: any) => u.email.toLowerCase() === email.toLowerCase().trim());
+      // Call backend API to persist to disk
+      let serverUser: UserProfile | null = null;
+      let serverMsg: string | undefined;
 
-        if (alreadyExists) {
-          resolve({ success: false, error: 'An account with this email already exists.' });
-          return;
-        }
-
-        const cleanHandle = handle 
-          ? (handle.startsWith('@') ? handle : `@${handle}`)
-          : `@${displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user'}`;
-
-        const isMaster = isDefaultAdminEmail(email);
-        const role: UserRole = isMaster ? 'admin' : 'user';
-        const status: UserStatus = isMaster ? 'approved' : 'pending';
-
-        const newUser = {
-          id: 'usr_' + Date.now().toString(36),
-          email: email.toLowerCase().trim(),
-          password,
-          displayName,
-          handle: cleanHandle,
-          avatarUrl: '',
-          bio: 'Explore modules, manage files, stream and communicate with peers.',
-          badge: 'verified' as const,
-          role,
-          status,
-          createdAt: new Date().toISOString(),
-        };
-
-        const updatedUsers = [...users, newUser];
-        localStorage.setItem('portal_registered_users', JSON.stringify(updatedUsers));
-
-        // Auto-login after sign-up
-        const profile: UserProfile = {
-          id: newUser.id,
-          email: newUser.email,
-          displayName: newUser.displayName,
-          handle: newUser.handle,
-          avatarUrl: newUser.avatarUrl,
-          bio: newUser.bio,
-          badge: newUser.badge,
-          role: newUser.role,
-          status: newUser.status,
-          createdAt: newUser.createdAt,
-        };
-
-        localStorage.setItem('portal_active_session', JSON.stringify(profile));
-        setAuth({
-          user: profile,
-          isAuthenticated: true,
-          isLoading: false,
+      try {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            password,
+            displayName: cleanDisplayName,
+            handle: cleanHandle,
+          }),
         });
-
-        if (status === 'pending') {
-          navigateTo('/auth/pending-approval');
-        } else {
-          navigateTo('/dashboard');
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          return { success: false, error: data.error || 'Failed to register.' };
         }
+        serverUser = data.user;
+        serverMsg = data.message;
+      } catch (netErr) {
+        console.warn('Backend register fetch failed, fallback to local store:', netErr);
+      }
 
-        resolve({ success: true });
-      }, 600);
-    });
+      const isMaster = isDefaultAdminEmail(cleanEmail);
+      const role: UserRole = serverUser?.role || (isMaster ? 'admin' : 'user');
+      const status: UserStatus = serverUser?.status || (isMaster ? 'approved' : 'pending');
+
+      const newUser: UserProfile = {
+        id: serverUser?.id || ('usr_' + Date.now().toString(36)),
+        email: cleanEmail,
+        displayName: cleanDisplayName,
+        handle: cleanHandle,
+        avatarUrl: serverUser?.avatarUrl || '',
+        bio: serverUser?.bio || 'Explore modules, manage files, stream and communicate with peers.',
+        badge: 'verified',
+        role,
+        status,
+        createdAt: serverUser?.createdAt || new Date().toISOString(),
+      };
+
+      // Save to local storage
+      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
+      let users: any[] = [];
+      try {
+        users = JSON.parse(usersStr);
+        if (!Array.isArray(users)) users = [];
+      } catch {
+        users = [];
+      }
+
+      const existingIdx = users.findIndex((u) => u.email?.toLowerCase() === cleanEmail);
+      if (existingIdx >= 0) {
+        users[existingIdx] = { ...users[existingIdx], ...newUser, password };
+      } else {
+        users.push({ ...newUser, password });
+      }
+      localStorage.setItem('portal_registered_users', JSON.stringify(users));
+
+      // Auto-login active session
+      localStorage.setItem('portal_active_session', JSON.stringify(newUser));
+      setAuth({
+        user: newUser,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+
+      if (status === 'pending' || status === 'rejected' || status === 'banned') {
+        navigateTo('/auth/pending');
+      } else {
+        navigateTo('/dashboard');
+      }
+
+      return {
+        success: true,
+        message: serverMsg || 'Account created successfully! Your request is currently waiting for admin approval.',
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Registration failed.' };
+    }
   };
 
   // Logout implementation
@@ -393,22 +453,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshUserStatus = async (): Promise<UserStatus | null> => {
     if (!auth.user) return null;
     try {
-      const usersStr = localStorage.getItem('portal_registered_users') || '[]';
-      const users = JSON.parse(usersStr);
-      const found = users.find(
-        (u: any) => (auth.user?.id && u.id === auth.user.id) || (auth.user?.email && u.email.toLowerCase() === auth.user.email.toLowerCase())
-      );
+      let liveStatus: UserStatus | null = null;
+      let liveRole: UserRole | null = null;
 
-      if (found) {
-        const newStatus: UserStatus = found.status || 'pending';
-        const newRole: UserRole = found.role || 'user';
+      // Try server API first
+      try {
+        const res = await fetch(`/api/auth/user/${auth.user.id || auth.user.email}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
+            liveStatus = data.user.status;
+            liveRole = data.user.role;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to query server user endpoint:', e);
+      }
+
+      // Check local storage if server not available
+      if (!liveStatus) {
+        const usersStr = localStorage.getItem('portal_registered_users') || '[]';
+        const users = JSON.parse(usersStr);
+        const found = users.find(
+          (u: any) =>
+            (auth.user?.id && u.id === auth.user.id) ||
+            (auth.user?.email && u.email.toLowerCase() === auth.user.email.toLowerCase())
+        );
+        if (found) {
+          liveStatus = found.status || 'pending';
+          liveRole = found.role || 'user';
+        }
+      }
+
+      if (liveStatus) {
         const updated: UserProfile = {
           ...auth.user,
-          status: newStatus,
-          role: newRole,
-          displayName: found.displayName || auth.user.displayName,
-          handle: found.handle || auth.user.handle,
-          avatarUrl: found.avatarUrl || auth.user.avatarUrl,
+          status: liveStatus,
+          role: liveRole || auth.user.role,
         };
 
         localStorage.setItem('portal_active_session', JSON.stringify(updated));
@@ -417,11 +498,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           user: updated,
         }));
 
-        if (newStatus === 'approved' && currentRoute === '/auth/pending-approval') {
+        if (liveStatus === 'approved' && (currentRoute === '/auth/pending' || currentRoute === '/auth/pending-approval')) {
           navigateTo('/dashboard');
         }
 
-        return newStatus;
+        return liveStatus;
       }
     } catch (e) {
       console.error('Failed to refresh user status:', e);
@@ -429,7 +510,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return null;
   };
 
-  // Admin user queries & actions
+  // Admin user queries & actions (syncs with server)
   const getAllRegisteredUsers = (): UserProfile[] => {
     try {
       const usersStr = localStorage.getItem('portal_registered_users') || '[]';
@@ -459,8 +540,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const updateUserStatus = (userId: string, newStatus: UserStatus, userEmail?: string): { success: boolean; error?: string } => {
+  const fetchAdminUsers = async (): Promise<UserProfile[]> => {
     try {
+      const res = await fetch('/api/admin/users');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.users)) {
+          const mappedUsers: UserProfile[] = data.users.map((u: any) => ({
+            id: u.id,
+            email: u.email,
+            displayName: u.displayName,
+            handle: u.handle || `@${u.username || 'user'}`,
+            avatarUrl: u.avatarUrl || '',
+            bio: u.bio || '',
+            badge: u.badge || 'verified',
+            role: u.role,
+            status: u.status,
+            createdAt: u.createdAt || new Date().toISOString(),
+          }));
+
+          // Sync with local storage
+          localStorage.setItem('portal_registered_users', JSON.stringify(mappedUsers));
+          return mappedUsers;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch admin users from server:', err);
+    }
+    return getAllRegisteredUsers();
+  };
+
+  const updateUserStatus = async (userId: string, newStatus: UserStatus, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      // Send to server
+      try {
+        await fetch('/api/admin/users/update-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, email: userEmail, status: newStatus }),
+        });
+      } catch (netErr) {
+        console.warn('Server status update warning:', netErr);
+      }
+
+      // Update local storage
       const usersStr = localStorage.getItem('portal_registered_users') || '[]';
       let users: any[] = [];
       try {
@@ -494,7 +617,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return u;
       });
 
-      // If user wasn't in array yet (e.g. from session), add them
       if (!matched && userEmail) {
         updatedUsers.push({
           id: userId,
@@ -520,13 +642,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAuth((prev) => ({ ...prev, user: updatedProfile }));
       }
 
-      // Asynchronously notify backend server endpoint
-      fetch('/api/admin/users/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, email: userEmail, status: newStatus }),
-      }).catch((e) => console.warn('Server status sync notice:', e));
-
       return { success: true };
     } catch (err: any) {
       console.error('updateUserStatus error:', err);
@@ -534,8 +649,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const updateUserRole = (userId: string, newRole: UserRole, userEmail?: string): { success: boolean; error?: string } => {
+  const updateUserRole = async (userId: string, newRole: UserRole, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Send to server
+      try {
+        await fetch(`/api/admin/users/${userId}/role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: newRole }),
+        });
+      } catch (netErr) {
+        console.warn('Server role update warning:', netErr);
+      }
+
       const usersStr = localStorage.getItem('portal_registered_users') || '[]';
       let users: any[] = [];
       try {
@@ -580,8 +706,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const deleteUser = (userId: string, userEmail?: string): { success: boolean; error?: string } => {
+  const deleteUser = async (userId: string, userEmail?: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Send to server
+      try {
+        await fetch(`/api/admin/users/${userId}`, {
+          method: 'DELETE',
+        });
+      } catch (netErr) {
+        console.warn('Server delete user warning:', netErr);
+      }
+
       const usersStr = localStorage.getItem('portal_registered_users') || '[]';
       let users: any[] = [];
       try {

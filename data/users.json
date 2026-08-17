@@ -1,0 +1,16 @@
+[
+  {
+    "id": "usr_master_admin",
+    "username": "admin",
+    "email": "admin@mamadtube.com",
+    "password": "admin123",
+    "displayName": "System Admin",
+    "handle": "@admin",
+    "avatarUrl": "",
+    "bio": "Platform Master Administrator with full privileges.",
+    "badge": "verified",
+    "role": "admin",
+    "status": "approved",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  }
+]

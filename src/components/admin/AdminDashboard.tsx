@@ -117,12 +117,13 @@ export default function AdminDashboard() {
   const { 
     auth, 
     getAllRegisteredUsers, 
+    fetchAdminUsers,
     updateUserStatus, 
     updateUserRole, 
     deleteUser 
   } = useApp();
 
-  const [usersList, setUsersList] = useState<UserProfile[]>([]);
+  const [usersList, setUsersList] = useState<UserProfile[]>(() => getAllRegisteredUsers());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'pending' | 'approved' | 'banned' | 'rejected'>('all');
   
@@ -157,20 +158,34 @@ export default function AdminDashboard() {
     }, 4000);
   };
 
-  const refreshUsers = () => {
-    setIsRefreshing(true);
+  const refreshUsers = async (silent: boolean = false) => {
+    if (!silent) setIsRefreshing(true);
     try {
+      if (fetchAdminUsers) {
+        const list = await fetchAdminUsers();
+        if (Array.isArray(list) && list.length > 0) {
+          setUsersList(list);
+          return;
+        }
+      }
       const list = getAllRegisteredUsers();
       setUsersList(list);
     } catch (err: any) {
       console.error('Failed to load users:', err);
     } finally {
-      setTimeout(() => setIsRefreshing(false), 300);
+      if (!silent) {
+        setTimeout(() => setIsRefreshing(false), 300);
+      }
     }
   };
 
   useEffect(() => {
     refreshUsers();
+    // 10-second automatic polling to sync new registrations in real time
+    const interval = setInterval(() => {
+      refreshUsers(true);
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // Compute Metrics

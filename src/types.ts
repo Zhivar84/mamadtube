@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type AppRoute = '/auth' | '/dashboard' | '/stream' | '/archive' | '/social' | '/chat' | '/admin' | '/auth/pending-approval';
+export type AppRoute = '/auth' | '/dashboard' | '/stream' | '/archive' | '/social' | '/chat' | '/admin' | '/auth/pending' | '/auth/pending-approval';
 
 export type UserRole = 'admin' | 'user';
 export type UserStatus = 'pending' | 'approved' | 'rejected' | 'banned';

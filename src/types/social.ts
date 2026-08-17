@@ -18,16 +18,15 @@ export interface SocialMediaItem {
 export interface PollOption {
   id: string;
   text: string;
-  votes: number;
+  votes: string[]; // Array of user IDs who voted for this option
 }
 
 export interface Poll {
   id: string;
-  question?: string;
+  question: string;
   options: PollOption[];
   totalVotes: number;
-  userVotedOptionId?: string;
-  expiresAt: string;
+  expiresAt?: string;
 }
 
 export interface CommentReply {

@@ -46,6 +46,7 @@ export default function TweetComposer({
   const [mediaItems, setMediaItems] = useState<SocialMediaItem[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [showPollCreator, setShowPollCreator] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -166,10 +167,11 @@ export default function TweetComposer({
       if (validOptions.length >= 2) {
         pollData = {
           id: 'poll_' + Date.now(),
+          question: pollQuestion.trim() || text.trim() || 'Community Poll',
           options: validOptions.map((opt, idx) => ({
             id: `opt_${idx + 1}`,
             text: opt.trim(),
-            votes: 0,
+            votes: [],
           })),
           totalVotes: 0,
           expiresAt: '1 day left',
@@ -190,11 +192,13 @@ export default function TweetComposer({
     setText('');
     setMediaItems([]);
     setShowPollCreator(false);
+    setPollQuestion('');
     setPollOptions(['', '']);
     setShowEmojiPicker(false);
   };
 
-  const hasContent = text.trim().length > 0 || mediaItems.length > 0 || (showPollCreator && pollOptions.some((o) => o.trim().length > 0));
+  const hasPollContent = showPollCreator && pollOptions.filter((o) => o.trim().length > 0).length >= 2;
+  const hasContent = text.trim().length > 0 || mediaItems.length > 0 || hasPollContent;
   const canSubmit = hasContent && !isOverLimit && !isUploading;
 
   return (
@@ -293,6 +297,15 @@ export default function TweetComposer({
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
+
+                  <input
+                    type="text"
+                    value={pollQuestion}
+                    maxLength={100}
+                    onChange={(e) => setPollQuestion(e.target.value)}
+                    placeholder="Poll question (optional, uses post text if blank)"
+                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-800 focus:border-sky-500 rounded-lg text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                  />
 
                   {pollOptions.map((opt, idx) => (
                     <div key={idx} className="flex items-center gap-2">

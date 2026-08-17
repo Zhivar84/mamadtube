@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import MamadTubeLogo from './Logo';
 import { 
@@ -22,6 +22,27 @@ export default function PendingApprovalPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const user = auth.user;
+
+  // 5-second auto-poll to detect approval in real-time
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const status = await refreshUserStatus();
+        if (status === 'approved') {
+          setStatusMessage('Your account has been approved! Redirecting...');
+          setTimeout(() => {
+            navigateTo('/dashboard');
+          }, 800);
+        }
+      } catch (e) {
+        // Silent background check failure
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [user, refreshUserStatus, navigateTo]);
+
   if (!user) return null;
 
   const handleCheckStatus = async () => {
@@ -33,13 +54,13 @@ export default function PendingApprovalPage() {
         setStatusMessage('Your account is approved! Redirecting to Dashboard...');
         setTimeout(() => {
           navigateTo('/dashboard');
-        }, 1200);
+        }, 1000);
       } else if (status === 'banned') {
-        setStatusMessage('Account status: Suspended/Banned.');
+        setStatusMessage('Account status: Suspended/Banned by administrator.');
       } else if (status === 'rejected') {
-        setStatusMessage('Account status: Registration not approved.');
+        setStatusMessage('Account status: Registration declined by administrator.');
       } else {
-        setStatusMessage('Account status is still pending admin review.');
+        setStatusMessage('Account status is currently waiting for admin approval.');
       }
     } catch {
       setStatusMessage('Unable to reach server. Please try again.');
@@ -56,7 +77,7 @@ export default function PendingApprovalPage() {
       icon: Clock,
       iconColor: 'text-amber-400',
       iconBg: 'bg-amber-500/10 border-amber-500/20',
-      description: 'Your account has been registered and is pending admin approval. You will gain access once an administrator reviews and approves your account.',
+      description: 'Account created successfully! Your request is currently waiting for admin approval. You will gain full access to all features once an administrator reviews and approves your account.',
       accentBorder: 'border-amber-500/30'
     },
     banned: {

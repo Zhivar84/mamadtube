@@ -267,26 +267,40 @@ export default function SocialFeed() {
   };
 
   const handleVotePoll = (postId: string, optionId: string) => {
+    const userId = currentUser.id;
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId && p.poll) {
-          // If already voted, ignore
-          if (p.poll.userVotedOptionId) return p;
+          // Check if current user already voted in ANY option
+          const alreadyVoted = p.poll.options.some((opt) =>
+            Array.isArray(opt.votes) && (opt.votes.includes(userId) || opt.votes.includes(currentUser.handle))
+          );
+          if (alreadyVoted) return p;
 
           const updatedOptions = p.poll.options.map((opt) => {
+            const currentVotes: string[] = Array.isArray(opt.votes)
+              ? opt.votes
+              : typeof (opt as any).votes === 'number'
+              ? Array((opt as any).votes).fill('legacy_user')
+              : [];
+
             if (opt.id === optionId) {
-              return { ...opt, votes: opt.votes + 1 };
+              return { ...opt, votes: [...currentVotes, userId] };
             }
-            return opt;
+            return { ...opt, votes: currentVotes };
           });
+
+          const newTotalVotes = updatedOptions.reduce(
+            (sum, opt) => sum + opt.votes.length,
+            0
+          );
 
           return {
             ...p,
             poll: {
               ...p.poll,
               options: updatedOptions,
-              totalVotes: p.poll.totalVotes + 1,
-              userVotedOptionId: optionId,
+              totalVotes: newTotalVotes,
             },
           };
         }

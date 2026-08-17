@@ -698,6 +698,204 @@ async function startServer() {
     }
   });
 
+  // User Storage Management & Disk Persistence
+  const USERS_FILE_PATH = path.join(process.cwd(), 'data', 'users.json');
+
+  interface UserRecord {
+    id: string;
+    username: string;
+    email: string;
+    password?: string;
+    displayName: string;
+    handle: string;
+    avatarUrl: string;
+    bio?: string;
+    badge?: 'verified' | 'creator' | 'pro';
+    role: 'admin' | 'user';
+    status: 'pending' | 'approved' | 'rejected' | 'banned';
+    createdAt: string;
+  }
+
+  const ADMIN_EMAILS = [
+    'admin@mamadtube.com',
+    'admin@example.com',
+    'zhivarmohammadzadeh@gmail.com',
+  ];
+
+  function isServerAdminEmail(email: string): boolean {
+    const envAdmin = (process.env.ADMIN_EMAIL || '').toLowerCase();
+    const lower = (email || '').toLowerCase().trim();
+    return (
+      ADMIN_EMAILS.includes(lower) ||
+      lower.startsWith('admin@') ||
+      (Boolean(envAdmin) && lower === envAdmin)
+    );
+  }
+
+  function ensureDataDirExists() {
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    if (!fs.existsSync(USERS_FILE_PATH)) {
+      const defaultUsers: UserRecord[] = [
+        {
+          id: 'usr_master_admin',
+          username: 'admin',
+          email: 'admin@mamadtube.com',
+          password: 'admin123',
+          displayName: 'System Admin',
+          handle: '@admin',
+          avatarUrl: '',
+          bio: 'Platform Master Administrator with full privileges.',
+          badge: 'verified',
+          role: 'admin',
+          status: 'approved',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ];
+      fs.writeFileSync(USERS_FILE_PATH, JSON.stringify(defaultUsers, null, 2), 'utf-8');
+    }
+  }
+
+  function getUsersFromDisk(): UserRecord[] {
+    try {
+      ensureDataDirExists();
+      const data = fs.readFileSync(USERS_FILE_PATH, 'utf-8');
+      const parsed = JSON.parse(data);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      console.error('Error reading users from disk:', err);
+      return [];
+    }
+  }
+
+  async function saveUsersToDisk(users: UserRecord[]): Promise<void> {
+    try {
+      ensureDataDirExists();
+      const jsonStr = JSON.stringify(users, null, 2);
+      await fs.promises.writeFile(USERS_FILE_PATH, jsonStr, 'utf-8');
+    } catch (err) {
+      console.error('Error saving users to disk:', err);
+      throw err;
+    }
+  }
+
+  function sanitizeUser(user: UserRecord): Omit<UserRecord, 'password'> {
+    const { password, ...sanitized } = user;
+    return sanitized;
+  }
+
+  // Auth: Register/Signup
+  const handleRegister = async (req: express.Request, res: express.Response) => {
+    try {
+      const { email, password, displayName, username, handle } = req.body;
+      if (!email || !password || !displayName) {
+        return res.status(400).json({ error: 'Email, password, and display name are required' });
+      }
+
+      const cleanEmail = email.toLowerCase().trim();
+      const cleanDisplayName = displayName.trim();
+      const cleanUsername = (username || cleanEmail.split('@')[0] || 'user').toLowerCase().trim();
+      const cleanHandle = handle 
+        ? (handle.startsWith('@') ? handle : `@${handle}`)
+        : `@${cleanUsername.replace(/[^a-z0-9]/g, '')}`;
+
+      const users = getUsersFromDisk();
+      const existingUser = users.find(u => u.email.toLowerCase() === cleanEmail);
+      if (existingUser) {
+        return res.status(400).json({ error: 'An account with this email already exists.' });
+      }
+
+      const isMaster = isServerAdminEmail(cleanEmail);
+      const newUser: UserRecord = {
+        id: 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
+        username: cleanUsername,
+        email: cleanEmail,
+        password: String(password),
+        displayName: cleanDisplayName,
+        handle: cleanHandle,
+        avatarUrl: '',
+        bio: 'Explore modules, manage files, stream and communicate with peers.',
+        badge: 'verified',
+        role: isMaster ? 'admin' : 'user',
+        status: isMaster ? 'approved' : 'pending',
+        createdAt: new Date().toISOString(),
+      };
+
+      users.push(newUser);
+      await saveUsersToDisk(users);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Account created successfully! Your request is currently waiting for admin approval.',
+        user: sanitizeUser(newUser),
+      });
+    } catch (err: any) {
+      console.error('Error during registration:', err);
+      return res.status(500).json({ error: 'Registration failed', details: err.message });
+    }
+  };
+
+  app.post('/api/auth/register', handleRegister);
+  app.post('/api/auth/signup', handleRegister);
+
+  // Auth: Login/Signin
+  const handleLogin = async (req: express.Request, res: express.Response) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+
+      const cleanEmail = email.toLowerCase().trim();
+      const users = getUsersFromDisk();
+      const found = users.find(u => u.email.toLowerCase() === cleanEmail && u.password === password);
+
+      if (!found) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+
+      return res.json({
+        success: true,
+        user: sanitizeUser(found),
+      });
+    } catch (err: any) {
+      console.error('Error during login:', err);
+      return res.status(500).json({ error: 'Login failed', details: err.message });
+    }
+  };
+
+  app.post('/api/auth/login', handleLogin);
+  app.post('/api/auth/signin', handleLogin);
+
+  // Auth: Current User Status & Profile
+  app.get('/api/auth/user/:id', (req, res) => {
+    const { id } = req.params;
+    const users = getUsersFromDisk();
+    const found = users.find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase());
+    if (!found) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    return res.json({ success: true, user: sanitizeUser(found) });
+  });
+
+  // Admin: Get all users
+  app.get('/api/admin/users', (req, res) => {
+    try {
+      const users = getUsersFromDisk();
+      const sanitized = users.map(sanitizeUser);
+      return res.json({
+        success: true,
+        count: sanitized.length,
+        users: sanitized,
+      });
+    } catch (err: any) {
+      console.error('Error fetching admin users:', err);
+      return res.status(500).json({ error: 'Failed to fetch users', details: err.message });
+    }
+  });
+
   // Admin Users Status Update Endpoint
   app.post('/api/admin/users/update-status', async (req, res) => {
     try {
@@ -711,17 +909,115 @@ async function startServer() {
         return res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
       }
 
+      const targetId = (userId || '').toLowerCase().trim();
+      const targetEmail = (email || '').toLowerCase().trim();
+
+      const users = getUsersFromDisk();
+      let matchedIndex = users.findIndex(u => 
+        (targetId && u.id.toLowerCase() === targetId) ||
+        (targetEmail && u.email.toLowerCase() === targetEmail)
+      );
+
+      if (matchedIndex >= 0) {
+        users[matchedIndex].status = status;
+      } else if (email) {
+        // Create user if missing
+        const isMaster = isServerAdminEmail(email);
+        users.push({
+          id: userId || 'usr_' + Date.now().toString(36),
+          username: email.split('@')[0],
+          email: email.toLowerCase().trim(),
+          password: 'defaultPass123',
+          displayName: email.split('@')[0],
+          handle: `@${email.split('@')[0]}`,
+          avatarUrl: '',
+          role: isMaster ? 'admin' : 'user',
+          status,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      await saveUsersToDisk(users);
+
       return res.json({
         success: true,
         message: `Status updated to ${status}`,
         userId,
         email,
         status,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
       console.error('Error updating user status on server:', err);
       return res.status(500).json({ error: 'Failed to update user status', details: err.message });
+    }
+  });
+
+  // Admin: Update user status via PATCH
+  app.patch('/api/admin/users/:id/status', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const validStatuses = ['pending', 'approved', 'rejected', 'banned'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: `Invalid status: ${status}` });
+      }
+
+      const users = getUsersFromDisk();
+      const user = users.find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase());
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      user.status = status;
+      await saveUsersToDisk(users);
+
+      return res.json({ success: true, user: sanitizeUser(user) });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to update status', details: err.message });
+    }
+  });
+
+  // Admin: Update user role via PATCH
+  app.patch('/api/admin/users/:id/role', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { role } = req.body;
+      if (role !== 'admin' && role !== 'user') {
+        return res.status(400).json({ error: 'Invalid role' });
+      }
+
+      const users = getUsersFromDisk();
+      const user = users.find(u => u.id === id || u.email.toLowerCase() === id.toLowerCase());
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      user.role = role;
+      await saveUsersToDisk(users);
+
+      return res.json({ success: true, user: sanitizeUser(user) });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to update role', details: err.message });
+    }
+  });
+
+  // Admin: Delete user
+  app.delete('/api/admin/users/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      let users = getUsersFromDisk();
+      const initialCount = users.length;
+      users = users.filter(u => u.id !== id && u.email.toLowerCase() !== id.toLowerCase());
+
+      if (users.length === initialCount) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      await saveUsersToDisk(users);
+      return res.json({ success: true, message: 'User deleted' });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to delete user', details: err.message });
     }
   });
 
