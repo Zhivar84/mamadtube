@@ -1,0 +1,6 @@
+{
+  "name": "mamadtube",
+  "description": "MamadTube - Core hub for video streaming, cloud archive, social feed, real-time messaging, admin management panel, and user approval workflow with custom profile customization.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
